@@ -34,9 +34,8 @@ def main():
     pre_ref_gtf = prerna_gtf(ref_gtf)
 
     # run Cufflinks on new gtf file and control BAM
-    #p = subprocess.Popen('cufflinks -G %s %s' % (pre_ref_gtf,), shell=True)
-    #os.waitpid(p.pid,0)
-    
+    p = subprocess.Popen('cufflinks --no-js-test -G %s %s' % (pre_ref_gtf,), shell=True)
+    os.waitpid(p.pid,0)
 
 ################################################################################
 # prerna_gtf
@@ -59,16 +58,17 @@ def prerna_gtf(ref_gtf):
         pre_end = tx.exons[-1].end
         pre_key = (tx.chrom, pre_start, pre_end, tx.strand)
 
+        for i in range(len(tx.exons)):
+            cols = (tx.chrom, 'clip_peaks', 'exon', str(tx.exons[i].start), str(tx.exons[i].end), '.', tx.strand, '.', gff.kv_gtf(tx.kv))
+            unspliced_hash.add((tx.chrom, tx.exons[i].start, tx.exons[i].end, tx.strand))
+            print >> pre_ref_open, '\t'.join(cols)
+
         if not pre_key in unspliced_hash:
             unspliced_hash.add(pre_key)
             pre_kv = copy.copy(tx.kv)
             pre_kv['transcript_id'] = 'UNSPLICED%d' % unspliced_index
             unspliced_index += 1
             cols = (tx.chrom, 'clip_peaks', 'exon', str(pre_start), str(pre_end), '.', tx.strand, '.', gff.kv_gtf(pre_kv))
-            print >> pre_ref_open, '\t'.join(cols)
-
-        for i in range(len(tx.exons)):
-            cols = (tx.chrom, 'clip_peaks', 'exon', str(tx.exons[i].start), str(tx.exons[i].end), '.', tx.strand, '.', gff.kv_gtf(tx.kv))
             print >> pre_ref_open, '\t'.join(cols)
 
     pre_ref_open.close()
