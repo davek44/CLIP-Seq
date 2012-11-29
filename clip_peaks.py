@@ -16,14 +16,15 @@ import gff
 # main
 ################################################################################
 def main():
-    usage = 'usage: %prog [options] <ref_gtf> <clip_bam>'
+    usage = 'usage: %prog [options] <clip_bam> <ref_gtf>'
     parser = OptionParser(usage)
 
     parser.add_option('-c', dest='control_bam', help='Control BAM file')
 
-    parser.add_option('-w', dest='window', type='int', default=50, help='Window size for scan statistic [Default: %default]')
+    parser.add_option('-w', dest='window_size', type='int', default=50, help='Window size for scan statistic [Default: %default]')
     parser.add_option('-p', dest='p_val', type='float', default=.01, help='P-value required of window scan statistic tests [Default: %default]')
 
+    parser.add_option('--cuff_done', dest='cuff_done', action='store_true', default=False, help='A cufflinks run to estimate the model parameters is already done [Default: %default]')
     parser.add_option('-t', dest='threads', type='int', default=2, help='Number of threads to use [Default: %default]')
 
     (options,args) = parser.parse_args()
@@ -31,8 +32,8 @@ def main():
     if len(args) != 2:
         parser.error(usage)
     else:
-        ref_gtf = args[0]
-        clip_bam = args[1]
+        clip_bam = args[0]
+        ref_gtf = args[1]
 
 
     ############################################
@@ -41,12 +42,14 @@ def main():
     if options.control_bam:
         # make a new gtf w/ unspliced RNAs
         pre_ref_gtf = prerna_gtf(ref_gtf)
+        print pre_ref_gtf
 
         # run Cufflinks on new gtf file and control BAM
-        subprocess.call('cufflinks -p %d -G %s %s' % (options.threads, pre_ref_gtf, options.control_bam), shell=True)
+        if not options.cuff_done:
+            subprocess.call('cufflinks -p %d -G %s %s' % (options.threads, pre_ref_gtf, options.control_bam), shell=True)
 
         # choose most expressed isoform and save spliced/unspliced fpkms
-        isoform_fpkms = control_max_fpkm(ref_gtf)
+        isoform_fpkms = control_max_fpkm(pre_ref_gtf)
 
         # filter gtf for clip analysis
         clip_ref_gtf = isoform_gtf_filter(ref_gtf, isoform_fpkms)
@@ -56,7 +59,8 @@ def main():
         span_ref_gtf = span_gtf(ref_gtf)
 
         # run Cufflinks on new gtf file and CLIP BAM
-        subprocess.call('cufflinks -p %d -G %s %s' % (options.threads, span_ref_gtf, clip_bam), shell=True)
+        if not options.cuff_done:
+            subprocess.call('cufflinks -p %d -G %s %s' % (options.threads, span_ref_gtf, clip_bam), shell=True)
 
         # not sure how to represent parameterization here...
         isoform_fpkms = {}
@@ -190,7 +194,7 @@ def control_max_fpkm(ref_gtf):
     # collect transcript spans to map spliced isoforms to their pre-RNA
     transcript_span = {}
     transcript_length = {}
-    span_unsplied = {}
+    span_unspliced = {}
     transcripts = gff.read_genes(ref_gtf, key_id='transcript_id')
     for tid in transcripts:
         tx = transcripts[tid]
@@ -203,12 +207,14 @@ def control_max_fpkm(ref_gtf):
         for exon in tx.exons:
             transcript_length[tid] += exon.end-exon.start+1
 
-        if tid.startswith('UNSPLICED'):
+        if len(tx.exons) == 1:
             span_unspliced[transcript_span[tid]] = tid
 
     # read FPKMS
     transcript_fpkm = {}
-    for line in open('isoforms.fpkm_tracking'):
+    fpkm_tracking_in = open('isoforms.fpkm_tracking')
+    line = fpkm_tracking_in.readline()
+    for line in fpkm_tracking_in:
         a = line.split('\t')
         a[-1] = a[-1].rstrip()
 
@@ -216,6 +222,7 @@ def control_max_fpkm(ref_gtf):
         fpkm = float(a[9])
 
         transcript_fpkm[transcript_id] = fpkm
+    fpkm_tracking_in.close()
 
     # choose isoform by FPKM and length
     isoform_fpkms = {}
@@ -223,6 +230,14 @@ def control_max_fpkm(ref_gtf):
     for gene_id in g2t:
         # focus on spliced transcripts
         spliced_transcripts = [tid for tid in g2t[gene_id] if not tid.startswith('UNSPLICED')]
+
+        # verify abundance estimates
+        for tid in spliced_transcripts:
+            if not tid in transcript_fpkm:
+                # this can happen if two transcripts are the same in the GTF file.
+                # cufflinks will ignore one of them.
+                print >> sys.stderr, 'WARNING: Missing FPKM for spliced transcript %s' % tid
+                transcript_fpkm[tid] = 0
 
         # choose isoform
         max_tid = spliced_transcripts[0]
@@ -234,8 +249,16 @@ def control_max_fpkm(ref_gtf):
                     max_tid = tid
 
         # find unspliced FPKM
-        unspliced_tid = span_unspliced[transcript_span[tid]]
-        isoform_fpkms[max_tid] = (transcript_fpkm[max_tid], transcript_fpkm[unspliced_tid])
+        unspliced_tid = span_unspliced[transcript_span[max_tid]]
+        if unspliced_tid not in transcript_fpkm:
+            # this can happen if two transcripts are the same except for differing strands
+            # cufflinks will ignore one of them.
+            print >> sys.stderr, 'WARNING: Missing FPKM for unspliced transcript %s' % unspliced_tid
+            unspliced_fpkm = transcript_fpkm[max_tid] / 2.0
+        else:
+            unspliced_fpkm = transcript_fpkm[unspliced_tid]
+        
+        isoform_fpkms[max_tid] = (transcript_fpkm[max_tid], unspliced_fpkm)
 
     return isoform_fpkms
 
@@ -299,6 +322,14 @@ def prerna_gtf(ref_gtf):
     pre_ref_fd, pre_ref_gtf = tempfile.mkstemp()
     pre_ref_open = os.fdopen(pre_ref_fd, 'w')
 
+    # add unspliced single exon transcripts to hash
+    for tid in transcripts:
+        tx = transcripts[tid]
+        if len(tx.exons) == 1:
+            tx_key = (tx.chrom, tx.exons[0].start, tx.exons[0].end, tx.strand)
+            unspliced_hash.add(tx_key)
+        
+    # process transcripts
     for tid in transcripts:
         tx = transcripts[tid]
         pre_start = tx.exons[0].start
@@ -307,7 +338,6 @@ def prerna_gtf(ref_gtf):
 
         for i in range(len(tx.exons)):
             cols = (tx.chrom, 'clip_peaks', 'exon', str(tx.exons[i].start), str(tx.exons[i].end), '.', tx.strand, '.', gff.kv_gtf(tx.kv))
-            unspliced_hash.add((tx.chrom, tx.exons[i].start, tx.exons[i].end, tx.strand))
             print >> pre_ref_open, '\t'.join(cols)
 
         if not pre_key in unspliced_hash:
