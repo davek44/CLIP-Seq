@@ -82,67 +82,23 @@ def main():
     for gene_id in gene_regions:
         (chrom, gene_start, gene_end, gene_strand) = gene_regions[gene_id]
 
-        ############################################
         # map reads to midpoints
-        ############################################
-        read_midpoints = []
-
-        # for each read in span
-        for aligned_read in clip_in.fetch(chrom, gene_start, gene_end):
-            ar_strand = '+'
-            if aligned_read.is_reverse:
-                ar_strand = '-'
-
-            # check strand and quality
-            if gene_strand == ar_strand and aligned_read.mapq > 0:
-
-                # map read to midpoint
-                read_midpoints.append(cigar_midpoint(aligned_read))
-
-        # in case of differing read alignment lengths
-        read_midpoints.sort()
+        read_midpoints = map_midpoints(chrom, gene_start, gene_end, gene_strand)
 
         ############################################
-        # process windows
+        # count reads in windows
         ############################################
-        poisson_lambda = float(len(read_midpoints)) / (gene_end - gene_start)
-        midpoints_window_start = 0 # index of the first read_midpoint that fit in the window (except I'm allowing 0)
-        midpoints_window_end = 0 # index of the first read_midpoint past the window
-
-        for window_start in range(gene_start, gene_end-options.window_size+1):
-            window_end = window_start + options.window_size
-
-            # update midpoints start
-            while midpoints_window_start < len(read_midpoints) and read_midpoints[midpoints_window_start] < window_start:
-                midpoints_window_start += 1
-            if midpoints_window_start >= len(read_midpoints):
-                break
-
-            # update midpoints end
-            while midpoints_window_end < len(read_midpoints) and read_midpoints[midpoints_window_end] < window_end:
-                midpoints_window_end += 1
-
-            # compute statistic
-            window_count = midpoints_window_end - midpoints_window_start
-            if window_count > 2:
-                p_val = scan_stat_approx3(window_count, options.window_size, gene_end-gene_start, poisson_lambda)
-                
-                if p_val < options.p_val:
-                    #cols = (chrom, window_start, window_end, 'peak', -math.log(p_val))
-                    cols = (chrom, window_start, window_end, window_count, p_val)
-                    # (score is supposed to be 1-1000)
-                    print '\t'.join([str(c) for c in cols])
+        window_stats = count_windows(gene_start, gene_end, options.window_size, read_midpoints)
 
         ############################################
         # post-process windows to peaks
         ############################################
-        
-        # ...
+        allowed_sig_gap = 1
+        peaks = windows2peaks(window_stats, allowed_sig_gap)
 
         ############################################
         # output peaks
         ############################################
-
         # ...
 
     clip_in.close()
@@ -264,6 +220,47 @@ def control_max_fpkm(ref_gtf):
 
 
 ################################################################################
+# count_windows
+#
+# Count the number of reads and compute the scan statistic p-value in each
+# window through the gene.
+################################################################################
+def count_windows(gene_start, gene_end, window_size, read_midpoints):
+    # set lambda using whole region
+    poisson_lambda = float(len(read_midpoints)) / (gene_end - gene_start)
+
+    midpoints_window_start = 0 # index of the first read_midpoint that fit in the window (except I'm allowing 0)
+    midpoints_window_end = 0 # index of the first read_midpoint past the window
+
+    window_stats = []
+
+    for window_start in range(gene_start, gene_end-window_size+1):
+        window_end = window_start + window_size
+
+        # update midpoints start
+        while midpoints_window_start < len(read_midpoints) and read_midpoints[midpoints_window_start] < window_start:
+            midpoints_window_start += 1
+        if midpoints_window_start >= len(read_midpoints):
+            break
+
+        # update midpoints end
+        while midpoints_window_end < len(read_midpoints) and read_midpoints[midpoints_window_end] < window_end:
+            midpoints_window_end += 1
+
+        # count reads
+        window_count = midpoints_window_end - midpoints_window_start
+
+        # compute p-value
+        if window_count > 2:
+            p_val = scan_stat_approx3(window_count, window_size, gene_end-gene_start, poisson_lambda)
+            window_stats.append((window_count,p_val))
+        else:
+            window_stats.append((window_count,p_val))
+
+    return window_counts, window_pvals
+
+
+################################################################################
 # get_gene_regions
 #
 # Return a hash of gene_id's mapping to lists consisting of (chromosome, start,
@@ -305,6 +302,32 @@ def isoform_gtf_filter(ref_gtf, isoform_set):
     iso_ref_open.close()
 
     return iso_ref_gtf
+
+
+################################################################################
+# map_midpoints
+#
+# Map reads to their alignment midpoints
+################################################################################
+def map_midpoints(chrom, gene_start, gene_end, gene_strand):
+    read_midpoints = []
+
+    # for each read in span
+    for aligned_read in clip_in.fetch(chrom, gene_start, gene_end):
+        ar_strand = '+'
+        if aligned_read.is_reverse:
+            ar_strand = '-'
+
+        # check strand and quality
+        if gene_strand == ar_strand and aligned_read.mapq > 0:
+
+            # map read to midpoint
+            read_midpoints.append(cigar_midpoint(aligned_read))
+
+    # in case of differing read alignment lengths
+    read_midpoints.sort()
+
+    return read_midpoints
 
 
 ################################################################################
@@ -389,6 +412,42 @@ def span_gtf(ref_gtf):
     span_ref_open.close()
 
     return span_ref_gtf
+
+
+################################################################################
+# windows2peaks
+#
+# Convert window counts and p-values to peak calls.
+################################################################################
+def windows2peaks(window_stats, allowed_sig_gap):
+    peaks = []
+    window_peak_start = None
+    insig_gap = 0
+
+    for i in range(len(window_stats)):
+        c, p = window_stats[i]
+
+        if p < options.p_val:
+            if window_peak_start == None:
+                window_peak_start = i
+            insig_gap = 0
+        elif window_peak_start != None:
+            insig_gap += 1
+            if insig_gap > allowed_sig_gap:
+                # save peak
+                peaks.append((gene_start+window_peak_start, gene_start+i-insig_gap))
+
+                # reset
+                window_peak_start = None
+                insig_gap = 0
+            else:
+                # let it ride
+                pass
+
+    if window_peak_start != None:
+        peaks.append((gene_start+window_peak_start, gene_start+len(window_stats)-1-insig_gap))
+
+    return peaks
 
 
 ################################################################################
