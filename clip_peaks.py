@@ -42,7 +42,6 @@ def main():
     if options.control_bam:
         # make a new gtf w/ unspliced RNAs
         pre_ref_gtf = prerna_gtf(ref_gtf)
-        print pre_ref_gtf
 
         # run Cufflinks on new gtf file and control BAM
         if not options.cuff_done:
@@ -72,33 +71,30 @@ def main():
     ############################################
     # process genes
     ############################################
-    # get gene regions
-    gene_regions = get_gene_regions(clip_ref_gtf)
+    # read genes
+    transcripts = read_genes(clip_ref_gtf, key_id='transcript_id')
 
     # open clip-seq bam
     clip_in = pysam.Samfile(clip_bam, 'rb')
 
     # for each span
-    for gene_id in gene_regions:
-        (chrom, gene_start, gene_end, gene_strand) = gene_regions[gene_id]
+    for transcript_id in transcripts:
+        tx = transcripts[transcript_id]
 
         # map reads to midpoints
-        read_midpoints = map_midpoints(chrom, gene_start, gene_end, gene_strand)
+        read_midpoints = map_midpoints(clip_in, tx.chrom, tx.exons[0].start, tx.exons[-1].end, tx.strand)
 
-        ############################################
-        # count reads in windows
-        ############################################
-        window_stats = count_windows(gene_start, gene_end, options.window_size, read_midpoints)
+        # find splice junctions
+        junctions = get_splice_junctions(tx)
 
-        ############################################
+        # count reads and compute p-values in windows
+        window_stats = count_windows(tx.exons[0].start, tx.exons[-1].end, options.window_size, read_midpoints)
+
         # post-process windows to peaks
-        ############################################
         allowed_sig_gap = 1
-        peaks = windows2peaks(window_stats, allowed_sig_gap)
+        peaks = windows2peaks(window_stats, options.p_val, allowed_sig_gap, tx.exons[0].start)
 
-        ############################################
         # output peaks
-        ############################################
         # ...
 
     clip_in.close()
@@ -151,7 +147,7 @@ def control_max_fpkm(ref_gtf):
     transcript_span = {}
     transcript_length = {}
     span_unspliced = {}
-    transcripts = gff.read_genes(ref_gtf, key_id='transcript_id')
+    transcripts = read_genes(ref_gtf, key_id='transcript_id')
     for tid in transcripts:
         tx = transcripts[tid]
 
@@ -255,33 +251,50 @@ def count_windows(gene_start, gene_end, window_size, read_midpoints):
             p_val = scan_stat_approx3(window_count, window_size, gene_end-gene_start, poisson_lambda)
             window_stats.append((window_count,p_val))
         else:
-            window_stats.append((window_count,p_val))
+            window_stats.append((window_count,1))
 
-    return window_counts, window_pvals
+    return window_stats
 
 
 ################################################################################
 # get_gene_regions
 #
 # Return a hash of gene_id's mapping to lists consisting of (chromosome, start,
-# end, strand). Coordinates are BED format.
+# end, strand). Coordinates are GTF format.
 ################################################################################
 def get_gene_regions(ref_gtf):
     gene_regions = {}
 
-    transcripts = gff.read_genes(ref_gtf, key_id='transcript_id')
+    transcripts = read_genes(ref_gtf, key_id='transcript_id')
 
     for tid in transcripts:
         tx = transcripts[tid]
         gid = tx.kv['gene_id']
 
         if not gid in gene_regions:
-            gene_regions[gid] = [tx.chrom, tx.exons[0].start-1, tx.exons[-1].end, tx.strand]
+            gene_regions[gid] = [tx.chrom, tx.exons[0].start, tx.exons[-1].end, tx.strand]
         else:
-            gene_regions[gid][1] = min(gene_regions[gid][1], tx.exons[0].start-1)
+            gene_regions[gid][1] = min(gene_regions[gid][1], tx.exons[0].start)
             gene_regions[gid][2] = max(gene_regions[gid][2], tx.exons[-1].end)
 
     return gene_regions
+
+
+################################################################################
+# get_splice_junctions
+#
+# Return a list of indexes mapping the splice junctions of the given
+# transcript Gene object.
+################################################################################
+def get_splice_junctions(tx):
+    junctions = []
+    if len(tx.exons) > 1:
+        junctions.append(tx.exons[0].end)
+        for i in range(1,len(tx.exons)-1):
+            junctions.append(tx.exons[i].start)
+            junctions.append(tx.exons[i].end)
+        junctions.append(tx.exons[-1].start)
+    return junctions
 
 
 ################################################################################
@@ -309,23 +322,24 @@ def isoform_gtf_filter(ref_gtf, isoform_set):
 #
 # Map reads to their alignment midpoints
 ################################################################################
-def map_midpoints(chrom, gene_start, gene_end, gene_strand):
+def map_midpoints(clip_in, chrom, gene_start, gene_end, gene_strand):
     read_midpoints = []
 
-    # for each read in span
-    for aligned_read in clip_in.fetch(chrom, gene_start, gene_end):
-        ar_strand = '+'
-        if aligned_read.is_reverse:
-            ar_strand = '-'
+    if chrom in clip_in.references:
+        # for each read in span
+        for aligned_read in clip_in.fetch(chrom, gene_start, gene_end):
+            ar_strand = '+'
+            if aligned_read.is_reverse:
+                ar_strand = '-'
 
-        # check strand and quality
-        if gene_strand == ar_strand and aligned_read.mapq > 0:
+            # check strand and quality
+            if gene_strand == ar_strand and aligned_read.mapq > 0:
 
-            # map read to midpoint
-            read_midpoints.append(cigar_midpoint(aligned_read))
+                # map read to midpoint
+                read_midpoints.append(cigar_midpoint(aligned_read))
 
-    # in case of differing read alignment lengths
-    read_midpoints.sort()
+        # in case of differing read alignment lengths
+        read_midpoints.sort()
 
     return read_midpoints
 
@@ -340,7 +354,7 @@ def prerna_gtf(ref_gtf):
     unspliced_index = 0
     unspliced_hash = set()
 
-    transcripts = gff.read_genes(ref_gtf, key_id='transcript_id')
+    transcripts = read_genes(ref_gtf, key_id='transcript_id')
 
     pre_ref_fd, pre_ref_gtf = tempfile.mkstemp()
     pre_ref_open = os.fdopen(pre_ref_fd, 'w')
@@ -374,6 +388,27 @@ def prerna_gtf(ref_gtf):
     pre_ref_open.close()
 
     return pre_ref_gtf
+
+
+################################################################################
+# read_genes
+#
+# Parse a gtf file and return a set of Gene objects in a hash keyed by the
+# id given.
+################################################################################
+def read_genes(gtf_file, key_id='transcript_id', sort=True):
+    genes = {}
+    for line in open(gtf_file):
+        a = line.split('\t')
+
+        kv = gff.gtf_kv(a[8])
+        if not kv[key_id] in genes:
+            genes[kv[key_id]] = Gene(a[0], a[6], kv)
+
+        if a[2] == 'exon':
+            genes[kv[key_id]].add_exon(int(a[3]), int(a[4]))
+
+    return genes
 
 
 ################################################################################
@@ -419,7 +454,7 @@ def span_gtf(ref_gtf):
 #
 # Convert window counts and p-values to peak calls.
 ################################################################################
-def windows2peaks(window_stats, allowed_sig_gap):
+def windows2peaks(window_stats, sig_p, allowed_sig_gap, gene_start):
     peaks = []
     window_peak_start = None
     insig_gap = 0
@@ -427,7 +462,7 @@ def windows2peaks(window_stats, allowed_sig_gap):
     for i in range(len(window_stats)):
         c, p = window_stats[i]
 
-        if p < options.p_val:
+        if p < sig_p:
             if window_peak_start == None:
                 window_peak_start = i
             insig_gap = 0
@@ -448,6 +483,44 @@ def windows2peaks(window_stats, allowed_sig_gap):
         peaks.append((gene_start+window_peak_start, gene_start+len(window_stats)-1-insig_gap))
 
     return peaks
+
+
+################################################################################
+# Gene class
+################################################################################
+class Gene:
+    def __init__(self, chrom, strand, kv):
+        self.chrom = chrom
+        self.strand = strand
+        self.kv = kv
+        self.exons = []
+
+    def add_exon(self, start, end):
+        self.exons.append(Exon(start,end))
+        if len(self.exons) > 1 and self.exons[-2].end > start:
+            self.exons.sort()
+
+    def __str__(self):
+        return '%s %s %s %s' % (self.chrom, self.strand, kv_gtf(self.kv), ','.join([ex.__str__() for ex in self.exons]))
+
+################################################################################
+# Exon class
+################################################################################
+class Exon:
+    def __init__(self, start, end):
+        self.start = start
+        self.end = end
+
+    def __cmp__(self, x):
+        if self.start < x.start:
+            return -1
+        elif self.start > x.start:
+            return 1
+        else:
+            return 0
+
+    def __str__(self):
+        return 'exon(%d-%d)' % (self.start,self.end)
 
 
 ################################################################################
