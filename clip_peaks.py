@@ -40,6 +40,7 @@ def main():
     # parameterize
     ############################################
     if options.control_bam:
+
         # make a new gtf w/ unspliced RNAs
         pre_ref_gtf = prerna_gtf(ref_gtf)
 
@@ -47,11 +48,11 @@ def main():
         if not options.cuff_done:
             subprocess.call('cufflinks -p %d -G %s %s' % (options.threads, pre_ref_gtf, options.control_bam), shell=True)
 
-        # choose most expressed isoform and save spliced/unspliced fpkms
-        isoform_fpkms = control_max_fpkm(pre_ref_gtf)
+        # store transcripts
+        transcripts = read_genes(ref_gtf, key_id='transcript_id')
 
-        # filter gtf for clip analysis
-        clip_ref_gtf = isoform_gtf_filter(ref_gtf, isoform_fpkms)
+        # set exon and preRNA FPKMs and filter for most expressed isoform
+        set_fpkm_control(transcripts, pre_ref_gtf)
     
     else:
         # make a new gtf file of only loci-spanning RNAs
@@ -61,34 +62,25 @@ def main():
         if not options.cuff_done:
             subprocess.call('cufflinks -p %d -G %s %s' % (options.threads, span_ref_gtf, clip_bam), shell=True)
 
-        # not sure how to represent parameterization here...
-        isoform_fpkms = {}
+        # store span transcripts
+        transcripts = read_genes(span_ref_gtf, key_id='transcript_id')
 
-        # filter gtf for clip analysis
-        clip_ref_gtf = span_ref_gtf
+        # set "exon" FPKMs
+        set_fpkm_span(transcripts)
 
 
     ############################################
     # process genes
     ############################################
-    # read genes
-    transcripts = read_genes(clip_ref_gtf, key_id='transcript_id')
-
     # open clip-seq bam
     clip_in = pysam.Samfile(clip_bam, 'rb')
 
     # for each span
-    for transcript_id in transcripts:
-        tx = transcripts[transcript_id]
-
-        # map reads to midpoints
-        read_midpoints = map_midpoints(clip_in, tx.chrom, tx.exons[0].start, tx.exons[-1].end, tx.strand)
-
-        # find splice junctions
-        junctions = get_splice_junctions(tx)
+    for tid in transcripts:
+        tx = transcripts[tid]
 
         # count reads and compute p-values in windows
-        window_stats = count_windows(tx.exons[0].start, tx.exons[-1].end, options.window_size, read_midpoints)
+        window_stats = count_windows(tx, options.window_size)
 
         # post-process windows to peaks
         allowed_sig_gap = 1
@@ -136,83 +128,13 @@ def cigar_midpoint(aligned_read):
 
 
 ################################################################################
-# control_max_fpkm
+# convolute_lambda
 #
-# Choose the most expressed isoform for gene and return a hash mapping
-# transcript_id's to tuples of the isoform's FPKM and its corresponding
-# unspliced version's FPKM.
+# Determine the convoluted poisson lambda for the given window using the
+# transcript's FPKM estimates.
 ################################################################################
-def control_max_fpkm(ref_gtf):
-    # collect transcript spans to map spliced isoforms to their pre-RNA
-    transcript_span = {}
-    transcript_length = {}
-    span_unspliced = {}
-    transcripts = read_genes(ref_gtf, key_id='transcript_id')
-    for tid in transcripts:
-        tx = transcripts[tid]
-
-        span_start = tx.exons[0].start
-        span_end = tx.exons[-1].end
-
-        transcript_span[tid] = (tx.chrom, span_start, span_end, tx.strand)
-        transcript_length[tid] = 0
-        for exon in tx.exons:
-            transcript_length[tid] += exon.end-exon.start+1
-
-        if len(tx.exons) == 1:
-            span_unspliced[transcript_span[tid]] = tid
-
-    # read FPKMS
-    transcript_fpkm = {}
-    fpkm_tracking_in = open('isoforms.fpkm_tracking')
-    line = fpkm_tracking_in.readline()
-    for line in fpkm_tracking_in:
-        a = line.split('\t')
-        a[-1] = a[-1].rstrip()
-
-        transcript_id = a[0]
-        fpkm = float(a[9])
-
-        transcript_fpkm[transcript_id] = fpkm
-    fpkm_tracking_in.close()
-
-    # choose isoform by FPKM and length
-    isoform_fpkms = {}
-    g2t = gff.g2t(ref_gtf)
-    for gene_id in g2t:
-        # focus on spliced transcripts
-        spliced_transcripts = [tid for tid in g2t[gene_id] if not tid.startswith('UNSPLICED')]
-
-        # verify abundance estimates
-        for tid in spliced_transcripts:
-            if not tid in transcript_fpkm:
-                # this can happen if two transcripts are the same in the GTF file.
-                # cufflinks will ignore one of them.
-                print >> sys.stderr, 'WARNING: Missing FPKM for spliced transcript %s' % tid
-                transcript_fpkm[tid] = 0
-
-        # choose isoform
-        max_tid = spliced_transcripts[0]
-        for tid in spliced_transcripts[1:]:
-            if transcript_fpkm[tid] > transcript_fpkm[max_tid]:
-                max_tid = tid
-            elif transcript_fpkm[tid] == transcript_fpkm[max_tid]:
-                if transcript_length[tid] > transcript_length[max_tid]:
-                    max_tid = tid
-
-        # find unspliced FPKM
-        unspliced_tid = span_unspliced[transcript_span[max_tid]]
-        if unspliced_tid not in transcript_fpkm:
-            # this can happen if two transcripts are the same except for differing strands
-            # cufflinks will ignore one of them.
-            print >> sys.stderr, 'WARNING: Missing FPKM for unspliced transcript %s' % unspliced_tid
-            unspliced_fpkm = transcript_fpkm[max_tid] / 2.0
-        else:
-            unspliced_fpkm = transcript_fpkm[unspliced_tid]
-        
-        isoform_fpkms[max_tid] = (transcript_fpkm[max_tid], unspliced_fpkm)
-
-    return isoform_fpkms
+def convolute_lambda(window_start, window_end, fpkm_exon, fpkm_pre, window_junctions):
+    return fpkm_exon
 
 
 ################################################################################
@@ -221,12 +143,24 @@ def control_max_fpkm(ref_gtf):
 # Count the number of reads and compute the scan statistic p-value in each
 # window through the gene.
 ################################################################################
-def count_windows(gene_start, gene_end, window_size, read_midpoints):
-    # set lambda using whole region
-    poisson_lambda = float(len(read_midpoints)) / (gene_end - gene_start)
+def count_windows(tx, window_size):
+    gene_start = tx.exons[0].start
+    gene_end = tx.exons[-1].end
+
+    # map reads to midpoints
+    read_midpoints = map_midpoints(clip_in, tx.chrom, tx.exons[0].start, tx.exons[-1].end, tx.strand)
+
+    # find splice junctions
+    junctions = get_splice_junctions(tx)
+
+    # set lambda using whole region (some day, compare this to the cufflinks estimate)
+    # poisson_lambda = float(len(read_midpoints)) / (gene_end - gene_start)
 
     midpoints_window_start = 0 # index of the first read_midpoint that fit in the window (except I'm allowing 0)
     midpoints_window_end = 0 # index of the first read_midpoint past the window
+
+    junctions_start = 0
+    junctions_end = 0
 
     window_stats = []
 
@@ -246,9 +180,20 @@ def count_windows(gene_start, gene_end, window_size, read_midpoints):
         # count reads
         window_count = midpoints_window_end - midpoints_window_start
 
+        # update junctions start
+        while junction_start < len(junctions) and junctions[junction_start] < window_start:
+            junction_start += 1
+
+        # update junctions end
+        while junction_end < len(junctions) and junctions[junction_end] < window_end:
+            junction_end += 1
+
+        # set lambda
+        window_lambda = convolute_lambda(window_start, window_end, tx.fpkm_exon, tx.fpkm_pre, junctions[junction_start:junction_end])
+
         # compute p-value
         if window_count > 2:
-            p_val = scan_stat_approx3(window_count, window_size, gene_end-gene_start, poisson_lambda)
+            p_val = scan_stat_approx3(window_count, window_size, gene_end-gene_start, window_lambda)
             window_stats.append((window_count,p_val))
         else:
             window_stats.append((window_count,1))
@@ -295,26 +240,6 @@ def get_splice_junctions(tx):
             junctions.append(tx.exons[i].end)
         junctions.append(tx.exons[-1].start)
     return junctions
-
-
-################################################################################
-# isoform_gtf_filter
-#
-# Filter a gtf file for only the isoforms in the given set.
-################################################################################
-def isoform_gtf_filter(ref_gtf, isoform_set):
-    iso_ref_fd, iso_ref_gtf = tempfile.mkstemp()
-    iso_ref_open = os.fdopen(iso_ref_fd, 'w')
-
-    for line in open(ref_gtf):
-        a = line.split('\t')
-        kv = gff.gtf_kv(a[8])
-        if kv['transcript_id'] in isoform_set:
-            print >> iso_ref_open, line,
-
-    iso_ref_open.close()
-
-    return iso_ref_gtf
 
 
 ################################################################################
@@ -426,6 +351,116 @@ def scan_stat_approx3(k, w, T, lambd):
 
 
 ################################################################################
+# set_fpkm_control
+#
+# For each gene:
+# 1. Choose the most expressed isoform.
+# 2. Set it's exonic and preRNA FPKMs.
+# 3. Filter the unchosen isoform out of 'ref_transcripts'
+################################################################################
+def set_fpkm_control(ref_transcripts, add_gtf):
+    # collect transcript spans to map spliced isoforms to their pre-RNA
+    transcript_span = {}
+    span_unspliced = {}
+    add_transcripts = read_genes(add_gtf, key_id='transcript_id')
+    for tid in add_transcripts:
+        tx = add_transcripts[tid]
+
+        span_start = tx.exons[0].start
+        span_end = tx.exons[-1].end
+
+        transcript_span[tid] = (tx.chrom, span_start, span_end, tx.strand)
+
+        if len(tx.exons) == 1:
+            span_unspliced[transcript_span[tid]] = tid
+
+    # read FPKMS
+    transcript_fpkm = {}
+    fpkm_tracking_in = open('isoforms.fpkm_tracking')
+    line = fpkm_tracking_in.readline()
+    for line in fpkm_tracking_in:
+        a = line.split('\t')
+        a[-1] = a[-1].rstrip()
+
+        transcript_id = a[0]
+        fpkm = float(a[9])
+
+        transcript_fpkm[transcript_id] = fpkm
+    fpkm_tracking_in.close()
+
+    # choose isoform by FPKM
+    g2t = gff.g2t(add_gtf)
+    for gene_id in g2t:
+        # focus on processed transcripts
+        processed_transcripts = [tid for tid in g2t[gene_id] if not tid.startswith('UNSPLICED')]
+
+        # verify abundance estimates
+        for tid in processed_transcripts:
+            if not tid in transcript_fpkm:
+                # this can happen if two transcripts are the same in the GTF file.
+                # cufflinks will ignore one of them.
+                print >> sys.stderr, 'WARNING: Missing FPKM for spliced transcript %s' % tid
+                transcript_fpkm[tid] = 0
+
+        # choose isoform
+        max_tid = processed_transcripts[0]
+        for tid in processed_transcripts[1:]:
+            if transcript_fpkm[tid] > transcript_fpkm[max_tid]:
+                max_tid = tid
+
+        # set exonic transcript FPKM
+        ref_transcripts[max_tid].fpkm_exon = transcript_fpkm[max_tid]
+
+        # set preRNA FPKM
+        if len(transcripts[max_tid].exons) == 1:
+            pass # leave unset
+        else:
+            # find unspliced
+            unspliced_tid = span_unspliced[transcript_span[max_tid]]
+            if unspliced_tid not in transcript_fpkm:
+                # this can happen if two transcripts are the same except for differing strands
+                # cufflinks will ignore one of them.
+                print >> sys.stderr, 'WARNING: Missing FPKM for unspliced transcript %s' % unspliced_tid
+                ref_transcripts[max_tid].fpkm_pre = transcript_fpkm[max_tid] / 2.0
+            else:
+                ref_transcripts[max_tid].fpkm_pre = transcript_fpkm[unspliced_tid]
+
+    # remove unset transcripts
+    for tid in ref_transcripts.keys():
+        if ref_transcripts[tid].fpkm_exon == None:
+            del ref_transcripts[tid]
+
+
+################################################################################
+# set_fpkm_span
+#
+# Set the "exonic" FPKMs for each gene span.
+################################################################################
+def set_fpkm_control(ref_transcripts):
+    # read FPKMS
+    fpkm_tracking_in = open('isoforms.fpkm_tracking')
+    line = fpkm_tracking_in.readline()
+    for line in fpkm_tracking_in:
+        a = line.split('\t')
+        a[-1] = a[-1].rstrip()
+
+        transcript_id = a[0]
+        fpkm = float(a[9])
+
+        ref_transcripts[transcript_id].fpkm_exon = fpkm
+    fpkm_tracking_in.close()
+
+    # remove unset transcripts
+    for tid in ref_transcripts.keys():
+        if ref_transcripts[tid].fpkm_exon == None:
+            # this can happen if two transcripts are the same except for differing strands
+            # cufflinks will ignore one of them.
+            print >> sys.stderr, 'WARNING: Missing FPKM for gene span %s' % tid
+
+            del ref_transcripts[tid]
+
+
+################################################################################
 # span_gtf
 #
 # Add unspliced preRNAs to the gtf file, focus on exons, and remove
@@ -494,6 +529,9 @@ class Gene:
         self.strand = strand
         self.kv = kv
         self.exons = []
+
+        self.fpkm_exon = None
+        self.fpkm_pre = None
 
     def add_exon(self, start, end):
         self.exons.append(Exon(start,end))
