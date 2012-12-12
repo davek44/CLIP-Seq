@@ -29,9 +29,11 @@ def main():
     parser = OptionParser(usage)
     parser.add_option('-c', dest='control_bam_file', default=None, help='Control BAM file')
     parser.add_option('-d', dest='downstream', default=2000, type='int', help='TSS downstream [Default: %default]')
+    parser.add_option('--te_down', dest='te_downstream', default=200, help='TSS downstream to use for gene assignment to a TE [Default: %default]')
     parser.add_option('-g', dest='geo_mean', default=False, action='store_true', help='Plot coverage geometric means [Default: %default]')
     parser.add_option('-o', dest='out_prefix', default='tss', help='Output prefix [Default: %default]')
     parser.add_option('-u', dest='upstream', default=5000, type='int', help='TSS upstream [Default: %default]')
+    parser.add_option('--te_up', dest='te_upstream', default=2000, help='TSS upstream to use for gene assignment to a TE [Default: %default]')
     (options,args) = parser.parse_args()
 
     if len(args) < 2:
@@ -41,7 +43,7 @@ def main():
         bam_files = args[1:]
 
     # map genes to TEs
-    gene_te = intersect_gene_te(gtf_file, options.upstream, options.downstream)
+    gene_te = intersect_gene_te(gtf_file, options.te_upstream, options.te_downstream)
 
     # count tss
     tss_count = {}

@@ -9,7 +9,7 @@ import gff
 # te_bam_enrich.py
 #
 # Compute the enrichment of aligned reads in a BAM file in transposable
-# element families.
+# element families relative to a null model determined by a control BAM file.
 ################################################################################
 
 ################################################################################

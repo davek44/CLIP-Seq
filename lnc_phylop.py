@@ -52,7 +52,8 @@ def main():
 
     # process overlapping chromosome blocks
     if options.lncrna:
-        process_file(chr_features, interval2lnc, lnc_cons, '%s/lnc_catalog.phyloP46way.placental.wigFix' % options.cons_dir)
+        lnc_wig = glob.glob('%s/lnc_catalog.*wigFix*' % options.cons_dir)[0]
+        process_file(chr_features, interval2lnc, lnc_cons, lnc_wig)
 
     else:
         for cons_file in glob.glob('%s/chr*' % options.cons_dir):
