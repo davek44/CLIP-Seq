@@ -133,8 +133,48 @@ def cigar_midpoint(aligned_read):
 # Determine the convoluted poisson lambda for the given window using the
 # transcript's FPKM estimates.
 ################################################################################
-def convolute_lambda(window_start, window_end, fpkm_exon, fpkm_pre, window_junctions):
-    return fpkm_exon
+def convolute_lambda(window_start, window_end, fpkm_exon, fpkm_pre, junctions, ji):
+    # after junctions
+    if ji >= len(junctions):
+        fpkm_conv = fpkm_exon+fpkm_pre
+
+    # next junction out of window
+    elif window_end < junctions[ji]:
+        if ji % 2 == 0:
+            fpkm_conv = fpkm_exon+fpkm_pre
+        else:
+            fpkm_conv = fpkm_pre
+
+    # junctions
+    else:
+        # window start to first junction
+        if ji % 2 == 0: # exon
+            fpkm_conv = (junctions[ji]-window_start)*(fpkm_exon+fpkm_pre)        
+        else: # intron
+            fpkm_conv = (junctions[ji]-window_start)*fpkm_pre
+
+        # advance
+        ji += 1
+
+        # between junctions
+        while ji < len(junctions) and junctions[ji] < window_end
+            if ji % 2 == 0: # exon
+                fpkm_conv += (junctions[ji]-junctions[ji-1])*(fpkm_exon+fpkm_pre)
+            else: # intron
+                fpkm_conv += (junctions[ji]-junctions[ji-1])*fpkm_pre
+
+            ji += 1
+
+        # back up
+        ji -= 1
+
+        # last junction to window end
+        if ji % 2 == 0: # intron
+            fpkm_conv += (window_end-junctions[ji])*fpkm_pre
+        else: # exon
+            fpkm_conv += (window_end-junctions[ji])*(fpkm_exon+fpkm_pre)
+
+    return fpkm_conv
 
 
 ################################################################################
@@ -159,8 +199,7 @@ def count_windows(tx, window_size):
     midpoints_window_start = 0 # index of the first read_midpoint that fit in the window (except I'm allowing 0)
     midpoints_window_end = 0 # index of the first read_midpoint past the window
 
-    junctions_start = 0
-    junctions_end = 0
+    junctions_i = 0 # index of the first junction ahead of the window start
 
     window_stats = []
 
@@ -180,16 +219,12 @@ def count_windows(tx, window_size):
         # count reads
         window_count = midpoints_window_end - midpoints_window_start
 
-        # update junctions start
-        while junction_start < len(junctions) and junctions[junction_start] < window_start:
-            junction_start += 1
-
-        # update junctions end
-        while junction_end < len(junctions) and junctions[junction_end] < window_end:
-            junction_end += 1
+        # update junctions index
+        while junctions_i < len(junctions) and junctions[junctions_i] < window_start:
+            junctions_i += 1
 
         # set lambda
-        window_lambda = convolute_lambda(window_start, window_end, tx.fpkm_exon, tx.fpkm_pre, junctions[junction_start:junction_end])
+        window_lambda = convolute_lambda(window_start, window_end, tx.fpkm_exon, tx.fpkm_pre, junctions, junctions_i)
 
         # compute p-value
         if window_count > 2:
