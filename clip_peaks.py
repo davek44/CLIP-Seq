@@ -132,6 +132,8 @@ def cigar_midpoint(aligned_read):
 #
 # Determine the convoluted poisson lambda for the given window using the
 # transcript's FPKM estimates.
+#
+# Recall that junctions contains the 1st bp of the next exon/intron.
 ################################################################################
 def convolute_lambda(window_start, window_end, fpkm_exon, fpkm_pre, junctions, ji):
     # after junctions
@@ -170,9 +172,9 @@ def convolute_lambda(window_start, window_end, fpkm_exon, fpkm_pre, junctions, j
 
         # last junction to window end
         if ji % 2 == 0: # intron
-            fpkm_conv += (window_end-junctions[ji])*fpkm_pre
+            fpkm_conv += (window_end-junctions[ji]+1)*fpkm_pre
         else: # exon
-            fpkm_conv += (window_end-junctions[ji])*(fpkm_exon+fpkm_pre)
+            fpkm_conv += (window_end-junctions[ji]+1)*(fpkm_exon+fpkm_pre)
 
     return fpkm_conv
 
@@ -222,8 +224,8 @@ def count_windows(tx, window_size):
         # count reads
         window_count = midpoints_window_end - midpoints_window_start
 
-        # update junctions index
-        while junctions_i < len(junctions) and junctions[junctions_i] < window_start:
+        # update junctions index (<= comparison because junctions holds the 1st bp of next exon/intron)
+        while junctions_i < len(junctions) and junctions[junctions_i] <= window_start:
             junctions_i += 1
 
         # set lambda
@@ -272,14 +274,16 @@ def get_gene_regions(ref_gtf):
 #
 # Return a list of indexes mapping the splice junctions of the given
 # transcript Gene object.
+#
+# For each junction, save the first bp of the next exon/intron.
 ################################################################################
 def get_splice_junctions(tx):
     junctions = []
     if len(tx.exons) > 1:
-        junctions.append(tx.exons[0].end)
+        junctions.append(tx.exons[0].end+1)
         for i in range(1,len(tx.exons)-1):
             junctions.append(tx.exons[i].start)
-            junctions.append(tx.exons[i].end)
+            junctions.append(tx.exons[i].end+1)
         junctions.append(tx.exons[-1].start)
     return junctions
 
