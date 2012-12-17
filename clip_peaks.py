@@ -85,12 +85,18 @@ def main():
     for tid in transcripts:
         tx = transcripts[tid]
 
+        # map reads to midpoints
+        read_midpoints = map_midpoints(clip_in, tx.chrom, tx.exons[0].start, tx.exons[-1].end, tx.strand)
+
+        # find splice junctions
+        junctions = map_splice_junctions(tx)
+
         # count reads and compute p-values in windows
-        window_stats = count_windows(tx, options.window_size)
+        window_stats = count_windows(clip_in, options.window_size, tx, read_midpoints, junctions)
 
         # post-process windows to peaks
         allowed_sig_gap = 1
-        peaks = windows2peaks(window_stats, options.p_val, allowed_sig_gap, tx.exons[0].start)
+        peaks = windows2peaks(read_midpoints, junctions, window_stats, options.p_val, allowed_sig_gap, tx.exons[0].start)
 
         # output peaks
         # ...
@@ -165,7 +171,7 @@ def convolute_lambda(window_start, window_end, fpkm_exon, fpkm_pre, junctions, j
         ji += 1
 
         # between junctions
-        while ji < len(junctions) and junctions[ji] < window_end
+        while ji < len(junctions) and junctions[ji] <= window_end:
             if ji % 2 == 0: # exon
                 fpkm_conv += (junctions[ji]-junctions[ji-1])*(fpkm_exon+fpkm_pre)
             else: # intron
@@ -182,6 +188,9 @@ def convolute_lambda(window_start, window_end, fpkm_exon, fpkm_pre, junctions, j
         else: # exon
             fpkm_conv += (window_end-junctions[ji]+1)*(fpkm_exon+fpkm_pre)
 
+        # normalize
+        fpkm_conv /= float(window_end-window_start+1)
+
     return fpkm_conv
 
 
@@ -191,15 +200,9 @@ def convolute_lambda(window_start, window_end, fpkm_exon, fpkm_pre, junctions, j
 # Count the number of reads and compute the scan statistic p-value in each
 # window through the gene.
 ################################################################################
-def count_windows(tx, window_size):
+def count_windows(clip_in, window_size, tx, read_midpoints, junctions):
     gene_start = tx.exons[0].start
     gene_end = tx.exons[-1].end
-
-    # map reads to midpoints
-    read_midpoints = map_midpoints(clip_in, tx.chrom, tx.exons[0].start, tx.exons[-1].end, tx.strand)
-
-    # find splice junctions
-    junctions = get_splice_junctions(tx)
 
     # set lambda using whole region (some day, compare this to the cufflinks estimate)
     # poisson_lambda = float(len(read_midpoints)) / (gene_end - gene_start)
@@ -276,14 +279,14 @@ def get_gene_regions(ref_gtf):
 
 
 ################################################################################
-# get_splice_junctions
+# map_splice_junctions
 #
 # Return a list of indexes mapping the splice junctions of the given
 # transcript Gene object.
 #
 # For each junction, save the first bp of the next exon/intron.
 ################################################################################
-def get_splice_junctions(tx):
+def map_splice_junctions(tx):
     junctions = []
     if len(tx.exons) > 1:
         junctions.append(tx.exons[0].end+1)
@@ -297,7 +300,8 @@ def get_splice_junctions(tx):
 ################################################################################
 # map_midpoints
 #
-# Map reads to their alignment midpoints
+# Map reads to their alignment midpoints, filtering for strand and quality.
+# Return a sorted list of midpoints.
 ################################################################################
 def map_midpoints(clip_in, chrom, gene_start, gene_end, gene_strand):
     read_midpoints = []
@@ -541,7 +545,7 @@ def span_gtf(ref_gtf):
 #
 # Convert window counts and p-values to peak calls.
 ################################################################################
-def windows2peaks(window_stats, sig_p, allowed_sig_gap, gene_start):
+def windows2peaks(read_midpoints, junctions, window_stats, sig_p, allowed_sig_gap, gene_start):
     peaks = []
     window_peak_start = None
     insig_gap = 0
