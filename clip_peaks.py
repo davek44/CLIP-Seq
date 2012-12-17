@@ -201,6 +201,9 @@ def count_windows(tx, window_size):
 
     junctions_i = 0 # index of the first junction ahead of the window start
 
+    # to avoid redundant computation
+    precomputed_pvals = {}
+
     window_stats = []
 
     for window_start in range(gene_start, gene_end-window_size+1):
@@ -228,7 +231,11 @@ def count_windows(tx, window_size):
 
         # compute p-value
         if window_count > 2:
-            p_val = scan_stat_approx3(window_count, window_size, gene_end-gene_start, window_lambda)
+            if (window_count,window_lambda) in precomputed_pvals:
+                p_val = precomputed_pvals[(window_count,window_lambda)]
+            else:
+                p_val = scan_stat_approx3(window_count, window_size, gene_end-gene_start, window_lambda)
+                precomputed_pvals[(window_count,window_lambda)] = p_val
             window_stats.append((window_count,p_val))
         else:
             window_stats.append((window_count,1))
