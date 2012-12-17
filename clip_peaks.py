@@ -9,6 +9,12 @@ import gff
 # clip_peaks.py
 #
 # Call peaks in CLIP-Seq data.
+#
+# Notes on conventions:
+# 1. All indexes are GFF-based. I.e. the first bp in a sequence is 1 and the
+#    last is len(sequence). For annotations, the start marks the first bp of
+#    the annotation and the end marks the last. The length is end-start+1.
+#    
 ################################################################################
 
 
@@ -209,7 +215,7 @@ def count_windows(tx, window_size):
     window_stats = []
 
     for window_start in range(gene_start, gene_end-window_size+1):
-        window_end = window_start + window_size
+        window_end = window_start + window_size - 1
 
         # update midpoints start
         while midpoints_window_start < len(read_midpoints) and read_midpoints[midpoints_window_start] < window_start:
@@ -218,7 +224,7 @@ def count_windows(tx, window_size):
             break
 
         # update midpoints end
-        while midpoints_window_end < len(read_midpoints) and read_midpoints[midpoints_window_end] < window_end:
+        while midpoints_window_end < len(read_midpoints) and read_midpoints[midpoints_window_end] <= window_end:
             midpoints_window_end += 1
 
         # count reads
