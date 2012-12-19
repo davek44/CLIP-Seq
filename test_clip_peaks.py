@@ -34,7 +34,6 @@ class TestConvoluteLambda(unittest.TestCase):
 
         return code_lambda
 
-
     def test0(self):
         # no junctions
         gene = 'EEEEEEEE'
@@ -45,9 +44,9 @@ class TestConvoluteLambda(unittest.TestCase):
         true_lambda = [float(ec*(self.fpkm_exon+self.fpkm_pre) + (self.window_size-ec)*self.fpkm_pre)/self.window_size for ec in exon_counts]
         code_lambda = self.compute_lambdas(len(gene),junctions)
 
+        self.assertEqual(len(true_lambda),len(code_lambda))
         for i in range(len(true_lambda)):
             self.assertEqual(true_lambda[i], code_lambda[i])
-
 
     def test1(self):
         # bunch of junctions
@@ -59,6 +58,7 @@ class TestConvoluteLambda(unittest.TestCase):
         true_lambda = [float(ec*(self.fpkm_exon+self.fpkm_pre) + (self.window_size-ec)*self.fpkm_pre)/self.window_size for ec in exon_counts]
         code_lambda = self.compute_lambdas(len(gene),junctions)
 
+        self.assertEqual(len(true_lambda),len(code_lambda))
         for i in range(len(true_lambda)):
             self.assertEqual(true_lambda[i], code_lambda[i])
 
@@ -72,8 +72,36 @@ class TestConvoluteLambda(unittest.TestCase):
         true_lambda = [float(ec*(self.fpkm_exon+self.fpkm_pre) + (self.window_size-ec)*self.fpkm_pre)/self.window_size for ec in exon_counts]
         code_lambda = self.compute_lambdas(len(gene),junctions)
 
+        self.assertEqual(len(true_lambda),len(code_lambda))
         for i in range(len(true_lambda)):
             self.assertEqual(true_lambda[i], code_lambda[i])
+
+
+################################################################################
+# windows2peaks
+################################################################################
+class TestWindows2Peaks(unittest.TestCase):
+    def setUp(self):
+        self.txome_size = 8
+        self.window_size = 4
+        self.read_midpoints = [3,3,4,5,6,6]
+
+        self.tx = clip_peaks.Gene('chr1','+',{})
+        self.tx.add_exon(1,10)
+        self.tx.fpkm_exon = 1
+        self.tx.fpkm_pre = 0
+
+    def test1(self):        
+        window_counts = [3,4,6,4,2]
+        window_stats = [(wc,.001) for wc in window_counts]
+
+        true_peaks = [(3,6,6,clip_peaks.scan_stat_approx3(6, self.window_size, self.txome_size, self.tx.fpkm_exon))]
+        code_peaks = pdb.runcall(clip_peaks.windows2peaks, self.read_midpoints, [], window_stats, self.window_size, .05, self.tx, self.txome_size)
+
+        self.assertEqual(len(true_peaks),len(code_peaks))
+        for i in range(len(true_peaks)):
+            self.assertEqual(true_peaks[i],code_peaks[i])
+
 
 ################################################################################
 # __main__

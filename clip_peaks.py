@@ -99,7 +99,7 @@ def main():
         window_stats = count_windows(clip_in, options.window_size, tx, read_midpoints, junctions, txome_size)
 
         # post-process windows to peaks
-        peaks = windows2peaks(read_midpoints, junctions, window_stats, options.p_val, tx.exons[0].start, txome_size)
+        peaks = windows2peaks(read_midpoints, junctions, window_stats, options.window_size, options.p_val, tx, txome_size)
 
         # output peaks
         # ...
@@ -333,7 +333,7 @@ def map_midpoints(clip_in, chrom, gene_start, gene_end, gene_strand):
 #
 # Merge adjacent significant windows and save index tuples.
 ################################################################################
-def merge_windows(window_stats, sig_p, gene_start, allowed_sig_gap = 1):
+def merge_windows(window_stats, window_size, sig_p, gene_start, allowed_sig_gap = 1):
     merged_windows = []
     window_peak_start = None
     insig_gap = 0
@@ -349,7 +349,7 @@ def merge_windows(window_stats, sig_p, gene_start, allowed_sig_gap = 1):
             insig_gap += 1
             if insig_gap > allowed_sig_gap:
                 # save window
-                merged_windows.append((gene_start+window_peak_start, gene_start+i-insig_gap))
+                merged_windows.append((gene_start+window_peak_start, gene_start+i-insig_gap+window_size-1))
 
                 # reset
                 window_peak_start = None
@@ -359,7 +359,7 @@ def merge_windows(window_stats, sig_p, gene_start, allowed_sig_gap = 1):
                 pass
 
     if window_peak_start != None:
-        merged_windows.append((gene_start+window_peak_start, gene_start+len(window_stats)-1-insig_gap))
+        merged_windows.append((gene_start+window_peak_start, gene_start+len(window_stats)-1-insig_gap+window_size-1))
 
     return merged_windows
 
@@ -369,9 +369,9 @@ def merge_windows(window_stats, sig_p, gene_start, allowed_sig_gap = 1):
 #
 # Compute a new p-value for the final peak.
 ################################################################################
-def peak_stats(windows_counts, junctions, txome_size):
+def peak_stats(windows_counts, junctions, txome_size, fpkm_exon, fpkm_pre):
     peaks = []
-    for wstart, wend, wcount in windows:
+    for wstart, wend, wcount in windows_counts:
         junctions_i = bisect_left(junctions, wstart)
         peak_lambda = convolute_lambda(wstart, wend, fpkm_exon, fpkm_pre, junctions, junctions_i)
         p_val = scan_stat_approx3(wcount, wend-wstart+1, txome_size, peak_lambda)
@@ -616,10 +616,10 @@ def transcriptome_size(transcripts, window_size):
 def trim_windows_count(windows, read_midpoints):
     trimmed_windows = []
     for wstart, wend in windows:
-        trim_start_i = read_midpoints[bisect_left(read_midpoints, wstart)]
-        trim_end_i = read_midpoints[bisect_right(read_midpoints, wend)]
-        read_count = trim_end_i - trim_start_i + 1
-        trimmed_windows.append((read_midpoints[trim_start_i], read_midpoints[trim_end_i], read_count))
+        trim_start_i = bisect_left(read_midpoints, wstart)
+        trim_end_i = bisect_right(read_midpoints, wend)
+        read_count = trim_end_i - trim_start_i
+        trimmed_windows.append((read_midpoints[trim_start_i], read_midpoints[trim_end_i-1], read_count))
     return trimmed_windows
 
 
@@ -628,10 +628,10 @@ def trim_windows_count(windows, read_midpoints):
 #
 # Convert window counts and p-values to peak calls.
 ################################################################################
-def windows2peaks(read_midpoints, junctions, window_stats, sig_p, gene_start, txome_size):
-    merged_windows = merge_windows(window_stats, sig_p, gene_start)
-    trimmed_windows_counts = trim_windows_count(merged_windows, read_midpoints, gene_start)
-    peaks = peak_stats(trimmed_windows_counts, junctions, txome_size)
+def windows2peaks(read_midpoints, junctions, window_stats, window_size, sig_p, tx, txome_size):
+    merged_windows = merge_windows(window_stats, window_size, sig_p, tx.exons[0].start)
+    trimmed_windows_counts = trim_windows_count(merged_windows, read_midpoints)
+    peaks = peak_stats(trimmed_windows_counts, junctions, txome_size, tx.fpkm_exon, tx.fpkm_pre)
     return peaks
 
 
