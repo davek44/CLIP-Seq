@@ -194,7 +194,7 @@ def convolute_lambda(window_start, window_end, fpkm_exon, fpkm_pre, junctions, j
         # normalize
         fpkm_conv /= float(window_end-window_start+1)
 
-    return fpkm_conv
+    return fpkm_conv/1000.0/1000000.0
 
 
 ################################################################################
