@@ -28,6 +28,8 @@ def main():
 
     parser.add_option('-c', dest='control_bam', help='Control BAM file')
 
+    parser.add_option('-o', dest='out_gff', default='peaks.gff', help='GFF output file [Default: %default]')
+
     parser.add_option('-w', dest='window_size', type='int', default=50, help='Window size for scan statistic [Default: %default]')
     parser.add_option('-p', dest='p_val', type='float', default=.01, help='P-value required of window scan statistic tests [Default: %default]')
 
@@ -84,6 +86,9 @@ def main():
     ############################################
     # open clip-seq bam
     clip_in = pysam.Samfile(clip_bam, 'rb')
+    
+    # open peak output gff
+    peaks_out = open(options.out_gff, 'w')
 
     # for each span
     for tid in transcripts:
@@ -102,9 +107,12 @@ def main():
         peaks = windows2peaks(read_midpoints, junctions, window_stats, options.window_size, options.p_val, tx, txome_size)
 
         # output peaks
-        # ...
+        for pstart, pend, pcount, ppval in peaks:
+            cols = [tx.chrom, 'clip_peaks', 'peak', str(pstart), str(pend), '.', tx.strand, '.', 'count: "%d"; p: "%.2e"' % (pcount,ppval)]
+            print >> peaks_out, '\t'.join(cols)
 
     clip_in.close()
+    peaks_out.close()
         
 
 ################################################################################
@@ -522,8 +530,9 @@ def set_fpkm_control(ref_transcripts, add_gtf):
         ref_transcripts[max_tid].fpkm_exon = transcript_fpkm[max_tid]
 
         # set preRNA FPKM
-        if len(transcripts[max_tid].exons) == 1:
-            pass # leave unset
+        if len(ref_transcripts[max_tid].exons) == 1:
+            # irrelevant
+            ref_transcripts[max_tid].fpkm_pre = 0
         else:
             # find unspliced
             unspliced_tid = span_unspliced[transcript_span[max_tid]]
@@ -546,7 +555,7 @@ def set_fpkm_control(ref_transcripts, add_gtf):
 #
 # Set the "exonic" FPKMs for each gene span.
 ################################################################################
-def set_fpkm_control(ref_transcripts):
+def set_fpkm_span(ref_transcripts):
     # read FPKMS
     fpkm_tracking_in = open('isoforms.fpkm_tracking')
     line = fpkm_tracking_in.readline()
@@ -558,6 +567,7 @@ def set_fpkm_control(ref_transcripts):
         fpkm = float(a[9])
 
         ref_transcripts[transcript_id].fpkm_exon = fpkm
+        ref_transcripts[transcript_id].fpkm_pre = 0
     fpkm_tracking_in.close()
 
     # remove unset transcripts
@@ -619,7 +629,7 @@ def trim_windows_count(windows, read_midpoints):
         trim_start_i = bisect_left(read_midpoints, wstart)
         trim_end_i = bisect_right(read_midpoints, wend)
         read_count = trim_end_i - trim_start_i
-        trimmed_windows.append((read_midpoints[trim_start_i], read_midpoints[trim_end_i-1], read_count))
+        trimmed_windows.append((int(read_midpoints[trim_start_i]), int(read_midpoints[trim_end_i-1]+0.5), read_count))
     return trimmed_windows
 
 
