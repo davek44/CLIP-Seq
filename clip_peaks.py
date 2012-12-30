@@ -28,10 +28,13 @@ def main():
 
     parser.add_option('-c', dest='control_bam', help='Control BAM file')
 
+    parser.add_option('--min_control_fpkm_exon', dest='min_control_fpkm_exon', type='float', default=0.50, help='Minimum FPKM to allow an exonic transcript from the control sequencing [Default: %default]')
+    parser.add_option('--min_control_fpkm_pre', dest='min_control_fpkm_pre', type='float', default=0.25, help='Minimum FPKM to allow a preRNA transcript from the control sequencing [Default: %default]')
+
     parser.add_option('-o', dest='out_gff', default='peaks.gff', help='GFF output file [Default: %default]')
 
     parser.add_option('-w', dest='window_size', type='int', default=50, help='Window size for scan statistic [Default: %default]')
-    parser.add_option('-p', dest='p_val', type='float', default=.01, help='P-value required of window scan statistic tests [Default: %default]')
+    parser.add_option('-p', dest='p_val', type='float', default=.001, help='P-value required of window scan statistic tests [Default: %default]')
 
     parser.add_option('--cuff_done', dest='cuff_done', action='store_true', default=False, help='A cufflinks run to estimate the model parameters is already done [Default: %default]')
     parser.add_option('-t', dest='threads', type='int', default=2, help='Number of threads to use [Default: %default]')
@@ -80,6 +83,9 @@ def main():
     # compute # of tests we will perform
     txome_size = transcriptome_size(transcripts, options.window_size)
 
+    # raise low FPKMs to their minimums
+    floor_control_fpkms(transcripts, options.min_control_fpkm_exon, options.min_control_fpkm_pre)
+
 
     ############################################
     # process genes
@@ -89,6 +95,7 @@ def main():
     
     # open peak output gff
     peaks_out = open(options.out_gff, 'w')
+    peak_id = 1
 
     # for each span
     for tid in transcripts:
@@ -108,8 +115,9 @@ def main():
 
         # output peaks
         for pstart, pend, pcount, ppval in peaks:
-            cols = [tx.chrom, 'clip_peaks', 'peak', str(pstart), str(pend), '.', tx.strand, '.', 'count: "%d"; p: "%.2e"' % (pcount,ppval)]
+            cols = [tx.chrom, 'clip_peaks', 'peak', str(pstart), str(pend), '.', tx.strand, '.', 'id: "PEAK%d"; transcript_id: "%s"; count: "%d"; p: "%.2e"' % (peak_id,tid,pcount,ppval)]
             print >> peaks_out, '\t'.join(cols)
+            peak_id += 1
 
     clip_in.close()
     peaks_out.close()
@@ -263,6 +271,18 @@ def count_windows(clip_in, window_size, tx, read_midpoints, junctions, txome_siz
             window_stats.append((window_count,1))
 
     return window_stats
+
+
+################################################################################
+# floor_control_fpkms
+#
+# Raise low FPKMs to their minimums
+################################################################################
+def floor_control_fpkms(transcripts, min_fpkm_exon, min_fpkm_pre):
+    for tid in transcripts:
+        tx = transcripts[tid]
+        tx.fpkm_exon = max(min_fpkm_exon, tx.fpkm_exon)
+        tx.fpkm_pre = max(min_fpkm_pre, tx.fpkm_pre)
 
 
 ################################################################################
