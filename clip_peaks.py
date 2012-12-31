@@ -31,7 +31,7 @@ def main():
     parser.add_option('--min_control_fpkm_exon', dest='min_control_fpkm_exon', type='float', default=0.50, help='Minimum FPKM to allow an exonic transcript from the control sequencing [Default: %default]')
     parser.add_option('--min_control_fpkm_pre', dest='min_control_fpkm_pre', type='float', default=0.25, help='Minimum FPKM to allow a preRNA transcript from the control sequencing [Default: %default]')
 
-    parser.add_option('-o', dest='out_gff', default='peaks.gff', help='GFF output file [Default: %default]')
+    parser.add_option('-o', dest='out_dir', default='peaks', help='Output directory [Default: %default]')
 
     parser.add_option('-w', dest='window_size', type='int', default=50, help='Window size for scan statistic [Default: %default]')
     parser.add_option('-p', dest='p_val', type='float', default=.001, help='P-value required of window scan statistic tests [Default: %default]')
@@ -47,6 +47,8 @@ def main():
         clip_bam = args[0]
         ref_gtf = args[1]
 
+    if not os.path.isdir(options.out_dir):
+        os.mkdir(options.out_dir)
 
     ############################################
     # parameterize
@@ -54,11 +56,11 @@ def main():
     if options.control_bam:
 
         # make a new gtf w/ unspliced RNAs
-        pre_ref_gtf = prerna_gtf(ref_gtf)
+        pre_ref_gtf = prerna_gtf(ref_gtf, options.out_dir)
 
         # run Cufflinks on new gtf file and control BAM
         if not options.cuff_done:
-            subprocess.call('cufflinks -p %d -G %s %s' % (options.threads, pre_ref_gtf, options.control_bam), shell=True)
+            subprocess.call('cufflinks -o %s -p %d -G %s %s' % (options.out_dir, options.threads, pre_ref_gtf, options.control_bam), shell=True)
 
         # store transcripts
         transcripts = read_genes(ref_gtf, key_id='transcript_id')
@@ -68,17 +70,20 @@ def main():
     
     else:
         # make a new gtf file of only loci-spanning RNAs
-        span_ref_gtf = span_gtf(ref_gtf)
+        span_ref_gtf = span_gtf(ref_gtf, options.out_dir)
 
         # run Cufflinks on new gtf file and CLIP BAM
         if not options.cuff_done:
-            subprocess.call('cufflinks -p %d -G %s %s' % (options.threads, span_ref_gtf, clip_bam), shell=True)
+            subprocess.call('cufflinks -o %s -p %d -G %s %s' % (options.out_dir, options.threads, span_ref_gtf, clip_bam), shell=True)
 
         # store span transcripts
         transcripts = read_genes(span_ref_gtf, key_id='transcript_id')
 
         # set "exon" FPKMs
         set_fpkm_span(transcripts)
+
+    # count transcriptome CLIP reads
+    total_reads = int(subprocess.check_output('intersectBed -bed -u -s -abam %s -b %s/transcripts.gtf | cut -f4 | sort -u | wc -l' % (clip_bam, options.out_dir), shell=True))
 
     # compute # of tests we will perform
     txome_size = transcriptome_size(transcripts, options.window_size)
@@ -94,7 +99,7 @@ def main():
     clip_in = pysam.Samfile(clip_bam, 'rb')
     
     # open peak output gff
-    peaks_out = open(options.out_gff, 'w')
+    peaks_out = open('%s/peaks.gff' % options.out_dir, 'w')
     peak_id = 1
 
     # for each span
@@ -108,14 +113,14 @@ def main():
         junctions = map_splice_junctions(tx)
 
         # count reads and compute p-values in windows
-        window_stats = count_windows(clip_in, options.window_size, tx, read_midpoints, junctions, txome_size)
+        window_stats = count_windows(clip_in, options.window_size, tx, read_midpoints, junctions, total_reads, txome_size)
 
         # post-process windows to peaks
-        peaks = windows2peaks(read_midpoints, junctions, window_stats, options.window_size, options.p_val, tx, txome_size)
+        peaks = windows2peaks(read_midpoints, junctions, window_stats, options.window_size, options.p_val, tx, total_reads, txome_size)
 
         # output peaks
         for pstart, pend, pcount, ppval in peaks:
-            cols = [tx.chrom, 'clip_peaks', 'peak', str(pstart), str(pend), '.', tx.strand, '.', 'id: "PEAK%d"; transcript_id: "%s"; count: "%d"; p: "%.2e"' % (peak_id,tid,pcount,ppval)]
+            cols = [tx.chrom, 'clip_peaks', 'peak', str(pstart), str(pend), '.', tx.strand, '.', 'id "PEAK%d"; transcript_id "%s"; count "%d"; p "%.2e"' % (peak_id,tid,pcount,ppval)]
             print >> peaks_out, '\t'.join(cols)
             peak_id += 1
 
@@ -166,7 +171,7 @@ def cigar_midpoint(aligned_read):
 #
 # Recall that junctions contains the 1st bp of the next exon/intron.
 ################################################################################
-def convolute_lambda(window_start, window_end, fpkm_exon, fpkm_pre, junctions, ji):
+def convolute_lambda(window_start, window_end, fpkm_exon, fpkm_pre, total_reads, junctions, ji):
     # after junctions
     if ji >= len(junctions):
         fpkm_conv = fpkm_exon+fpkm_pre
@@ -210,7 +215,7 @@ def convolute_lambda(window_start, window_end, fpkm_exon, fpkm_pre, junctions, j
         # normalize
         fpkm_conv /= float(window_end-window_start+1)
 
-    return fpkm_conv/1000.0/1000000.0
+    return fpkm_conv/1000.0*(total_reads/1000000.0)
 
 
 ################################################################################
@@ -219,7 +224,7 @@ def convolute_lambda(window_start, window_end, fpkm_exon, fpkm_pre, junctions, j
 # Count the number of reads and compute the scan statistic p-value in each
 # window through the gene.
 ################################################################################
-def count_windows(clip_in, window_size, tx, read_midpoints, junctions, txome_size):
+def count_windows(clip_in, window_size, tx, read_midpoints, junctions, total_reads, txome_size):
     gene_start = tx.exons[0].start
     gene_end = tx.exons[-1].end
 
@@ -257,7 +262,7 @@ def count_windows(clip_in, window_size, tx, read_midpoints, junctions, txome_siz
             junctions_i += 1
 
         # set lambda
-        window_lambda = convolute_lambda(window_start, window_end, tx.fpkm_exon, tx.fpkm_pre, junctions, junctions_i)
+        window_lambda = convolute_lambda(window_start, window_end, tx.fpkm_exon, tx.fpkm_pre, total_reads, junctions, junctions_i)
 
         # compute p-value
         if window_count > 2:
@@ -397,11 +402,11 @@ def merge_windows(window_stats, window_size, sig_p, gene_start, allowed_sig_gap 
 #
 # Compute a new p-value for the final peak.
 ################################################################################
-def peak_stats(windows_counts, junctions, txome_size, fpkm_exon, fpkm_pre):
+def peak_stats(windows_counts, junctions, total_reads, txome_size, fpkm_exon, fpkm_pre):
     peaks = []
     for wstart, wend, wcount in windows_counts:
         junctions_i = bisect_left(junctions, wstart)
-        peak_lambda = convolute_lambda(wstart, wend, fpkm_exon, fpkm_pre, junctions, junctions_i)
+        peak_lambda = convolute_lambda(wstart, wend, fpkm_exon, fpkm_pre, total_reads, junctions, junctions_i)
         p_val = scan_stat_approx3(wcount, wend-wstart+1, txome_size, peak_lambda)
         peaks.append((wstart,wend,wcount,p_val))
     return peaks
@@ -413,14 +418,14 @@ def peak_stats(windows_counts, junctions, txome_size, fpkm_exon, fpkm_pre):
 # Add unspliced preRNAs to the gtf file, focus on exons, and remove
 # redundancies.
 ################################################################################
-def prerna_gtf(ref_gtf):
+def prerna_gtf(ref_gtf, out_dir):
     unspliced_index = 0
     unspliced_hash = set()
 
     transcripts = read_genes(ref_gtf, key_id='transcript_id')
 
-    pre_ref_fd, pre_ref_gtf = tempfile.mkstemp()
-    pre_ref_open = os.fdopen(pre_ref_fd, 'w')
+    pre_ref_gtf = '%s/prerna.gtf' % out_dir
+    pre_ref_open = open(pre_ref_gtf, 'w')
 
     # add unspliced single exon transcripts to hash
     for tid in transcripts:
@@ -479,6 +484,11 @@ def read_genes(gtf_file, key_id='transcript_id', sort=True):
 #
 # Approximation 3.3 to the unconditional, poisson distributed scan statistic
 # defined on p.28 of Glaz, Naus, Wallenstein book.
+#
+# k is the # of reads
+# w is the window size
+# T is the transcriptome size
+# lambd is the reads/nt
 ################################################################################
 def scan_stat_approx3(k, w, T, lambd):
     L = float(T)/w
@@ -606,13 +616,13 @@ def set_fpkm_span(ref_transcripts):
 # Add unspliced preRNAs to the gtf file, focus on exons, and remove
 # redundancies.
 ################################################################################
-def span_gtf(ref_gtf):
+def span_gtf(ref_gtf, out_dir):
     # obtain gene regions
     gene_regions = get_gene_regions(ref_gtf)
 
     # print
-    span_ref_fd, span_ref_gtf = tempfile.mkstemp()
-    span_ref_open = os.fdopen(span_ref_fd, 'w')
+    span_ref_gtf = '%s/span.gtf' % out_dir
+    span_ref_open = open(span_ref_gtf, 'w')
 
     for gid in gene_regions:
         g = gene_regions[gid]
@@ -658,10 +668,10 @@ def trim_windows_count(windows, read_midpoints):
 #
 # Convert window counts and p-values to peak calls.
 ################################################################################
-def windows2peaks(read_midpoints, junctions, window_stats, window_size, sig_p, tx, txome_size):
+def windows2peaks(read_midpoints, junctions, window_stats, window_size, sig_p, tx, total_reads, txome_size):
     merged_windows = merge_windows(window_stats, window_size, sig_p, tx.exons[0].start)
     trimmed_windows_counts = trim_windows_count(merged_windows, read_midpoints)
-    peaks = peak_stats(trimmed_windows_counts, junctions, txome_size, tx.fpkm_exon, tx.fpkm_pre)
+    peaks = peak_stats(trimmed_windows_counts, junctions, total_reads, txome_size, tx.fpkm_exon, tx.fpkm_pre)
     return peaks
 
 
