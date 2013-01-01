@@ -2,7 +2,7 @@
 from optparse import OptionParser
 from scipy.stats import poisson
 from bisect import bisect_left, bisect_right
-import copy, math, os, subprocess, sys, tempfile
+import copy, math, os, pdb, subprocess, sys, tempfile
 import pysam
 import gff
 
@@ -275,6 +275,9 @@ def count_windows(clip_in, window_size, tx, read_midpoints, junctions, total_rea
         else:
             window_stats.append((window_count,1))
 
+        # for debugging
+        # print tx.exons[0].start+len(window_stats)-1, window_count, window_stats[-1][1], window_lambda
+
     return window_stats
 
 
@@ -489,12 +492,18 @@ def read_genes(gtf_file, key_id='transcript_id', sort=True):
 # w is the window size
 # T is the transcriptome size
 # lambd is the reads/nt
+#
+# It seems to breakdown on the very low end, so I'm adding a check that
+# that k is greater than psi.
 ################################################################################
 def scan_stat_approx3(k, w, T, lambd):
     L = float(T)/w
     psi = float(lambd)*w
-    sigma = (k-1.0)*(L-1.0)*poisson.pmf(k, psi)
-    p_val = 1.0 - math.exp(-sigma)
+    if k < psi:
+        p_val = 1.0
+    else:
+        sigma = (k-1.0)*(L-1.0)*poisson.pmf(k, psi)
+        p_val = 1.0 - math.exp(-sigma)
     return p_val
 
 
@@ -721,3 +730,4 @@ class Exon:
 ################################################################################
 if __name__ == '__main__':
     main()
+    #pdb.runcall(main)
