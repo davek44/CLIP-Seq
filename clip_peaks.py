@@ -3,7 +3,7 @@ from optparse import OptionParser
 from scipy.stats import poisson
 from bisect import bisect_left, bisect_right
 import copy, math, os, pdb, subprocess, sys, tempfile
-import pysam
+import pybedtools, pysam
 import gff
 
 ################################################################################
@@ -365,6 +365,38 @@ def map_midpoints(clip_in, chrom, gene_start, gene_end, gene_strand):
 
 
 ################################################################################
+# merge_peaks_count
+#
+# Merge the given trimmed windows with counts using bedtools and then recount
+# the reads in the new intervals.
+################################################################################
+def merge_peaks_count(trimmed_windows_counts, read_midpoints):
+    # create BED intervals
+    bed_intervals = []
+    for wstart, wend, wcount in trimmed_windows_counts:
+        bed_a = ['chrFAKE', str(wstart-1), str(wend)]
+        bed_intervals.append(pybedtools.create_interval_from_list(bed_a))
+    bedtool = pybedtools.BedTool(bed_intervals)
+
+    # merge BED intervals
+    bedtool_merge = bedtool.merge(stream=True)
+
+    # recount peaks
+    peaks = []
+    for bed_interval in bedtool_merge.features():
+        pstart = bed_interval.start+1
+        pend = bed_interval.end
+
+        reads_start_i = bisect_left(read_midpoints, pstart)
+        reads_end_i = bisect_right(read_midpoints, pend)
+        read_count = reads_end_i - reads_start_i
+
+        peaks.append((pstart, pend, read_count))
+
+    return peaks
+
+
+################################################################################
 # merge_windows
 #
 # Merge adjacent significant windows and save index tuples.
@@ -680,7 +712,8 @@ def trim_windows_count(windows, read_midpoints):
 def windows2peaks(read_midpoints, junctions, window_stats, window_size, sig_p, tx, total_reads, txome_size):
     merged_windows = merge_windows(window_stats, window_size, sig_p, tx.exons[0].start)
     trimmed_windows_counts = trim_windows_count(merged_windows, read_midpoints)
-    peaks = peak_stats(trimmed_windows_counts, junctions, total_reads, txome_size, tx.fpkm_exon, tx.fpkm_pre)
+    statless_peaks = merge_peaks_count(trimmed_windows_counts, read_midpoints)
+    peaks = peak_stats(statless_peaks, junctions, total_reads, txome_size, tx.fpkm_exon, tx.fpkm_pre)
     return peaks
 
 
