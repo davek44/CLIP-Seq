@@ -115,14 +115,17 @@ def make_iter_fastq(fastq_files, reads_set, read_len):
 #  multimap_set: Set of multimapping read headers
 ################################################################################
 def parse_iter_bam(read_len):
+    # original bam for header
+    original_bam = pysam.Samfile('thout%d/accepted_hits.bam' % read_len, 'rb')
+
     # initialize uniquely mapped read BAM file
-    unique_bam = pysam.Samfile('thout%d/unique.bam' % read_len, 'wb', template='thout%d/accepted_hits.bam' % read_len)
+    unique_bam = pysam.Samfile('thout%d/unique.bam' % read_len, 'wb', template=original_bam)
 
     # initialize alignment sets
     aligned_set = set()
     multimap_set = set()
 
-    for aligned_read in pysam.Samfile('thout%d/accepted_hits.bam' % read_len):
+    for aligned_read in original_bam:
         # save aligned read header
         aligned_set.add(aligned_read.qname)
 
@@ -150,10 +153,13 @@ def parse_iter_bam(read_len):
 #  lost_multi.bam: BAM file filtered for multimapping reads lost in the next iter
 ################################################################################
 def split_lost_multi(read_len, aligned_set):
-    # initialize lost multi mapped read BAM file
-    lost_multi_bam = pysam.Samfile('thout%d/lost_multi.bam' % read_len, 'wb', template='thout%d/accepted_hits.bam')
+    # open original bam
+    original_bam = pysam.Samfile('thout%d/accepted_hits.bam' % read_len, 'rb')
 
-    for aligned_read in pysam.Samfile('thout%d/accepted_hits.bam' % read_len):
+    # initialize lost multi mapped read BAM file
+    lost_multi_bam = pysam.Samfile('thout%d/lost_multi.bam' % read_len, 'wb', template=original_bam)
+
+    for aligned_read in original_bam:
         if aligned_read.opt('NH') > 1 and aligned_read.qname not in aligned_set:
             lost_multi_bam.write(aligned_read)
 
