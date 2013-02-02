@@ -39,7 +39,7 @@ def main():
         fastq_files = args[1].split(',')
 
     # initialize multimap set for first iteration
-    multimap_set = set()
+    multimap_set = None
 
     for read_len in range(options.initial_seed, options.read_len_max+1):
         # make a new fastq of only multimappers
