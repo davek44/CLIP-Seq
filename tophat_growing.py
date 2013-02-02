@@ -91,7 +91,7 @@ def make_iter_fastq(fastq_files, reads_set, read_len):
             mid = fq_open.readline()
             qual = fq_open.readline()
 
-            if reads_set == None or header[1:].rstrip() in reads_set:
+            if reads_set == None or header[1:].split()[0] in reads_set:
                 print >> out_fq, header.rstrip()
                 print >> out_fq, seq[:read_len].rstrip()
                 print >> out_fq, mid.rstrip()
