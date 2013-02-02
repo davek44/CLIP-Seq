@@ -46,7 +46,7 @@ def main():
         make_iter_fastq(fastq_files, multimap_set, read_len)
 
         # align
-        subprocess.call('tophat -o thout%d -p %d -G %s --no-novel-juncs --transcriptome-index=txome -T %s iter.fq' % (options.initial_seed, options.num_threads, options.gtf_file, bowtie_index), shell=True)
+        subprocess.call('tophat -o thout%d -p %d -G %s --no-novel-juncs --transcriptome-index=txome -T %s iter.fq' % (read_len, options.num_threads, options.gtf_file, bowtie_index), shell=True)
 
         # parse BAM to split unique and store aligned and multimapped
         aligned_set, new_multimap_set = parse_iter_bam(read_len)
