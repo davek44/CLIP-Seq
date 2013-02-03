@@ -51,7 +51,7 @@ def main():
         # parse BAM to split unique and store aligned and multimapped
         aligned_set, new_multimap_set = parse_iter_bam(read_len)
 
-        # Split lost multimappers from previous iteration
+        # split lost multimappers from previous iteration
         if read_len > options.initial_seed:
             split_lost_multi(read_len-1, aligned_set)
 
@@ -61,8 +61,18 @@ def main():
         # for debug purposes for now
         os.rename('iter.fq', 'thout%d/iter.fq' % read_len)
 
+    # save remaining multimappers
+    split_lost_multi(options.read_len_max, set())
+
     # clean up
     #os.remove('iter.fq')
+
+    # combine all alignments
+    bam_files = []
+    for read_len in range(options.initial_seed, options.read_len_max+1):
+        bam_files.append('thout%d/unique.bam' % read_len)
+        bam_files.append('thout%d/lost_multi.bam' % read_len)
+    subprocess.call('samtools merge all.bam %s' % ' '.join(bam_files), shell=True)
 
 
 ################################################################################
