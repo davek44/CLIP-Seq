@@ -9,8 +9,7 @@ import pysam
 # Align reads with tophat where we initially start with a 5' seed and grow
 # outward from there only if the read multimaps.
 #
-# For now, I'm aligning only to the transcriptome because I'm going to
-# ignore intergenic reads.
+# Assuming all reads are the same length.
 ################################################################################
 
 
@@ -23,7 +22,6 @@ def main():
 
     # shrinking options
     parser.add_option('-s', '--initial_seed', dest='initial_seed', type='int', default=18, help='Seed length to initially consider for aligning the reads [Default: %default]')
-    parser.add_option('-x', '--read_len_max', dest='read_len_max', type='int', help='Maximum read length to consider [Default: %default]')
 
     # tophat options
     parser.add_option('-p', '--num_threads', dest='num_threads', type='int', default=2, help='# of TopHat threads to launch [Default: %default]')
@@ -38,15 +36,18 @@ def main():
         bowtie_index = args[0]
         fastq_files = args[1].split(',')
 
+    # find read length
+    full_read_length = fastq_read_length(fastq_files[0])
+
     # initialize multimap set for first iteration
     multimap_set = None
 
-    for read_len in range(options.initial_seed, options.read_len_max+1):
+    for read_len in range(options.initial_seed, full_read_length+1):
         # make a new fastq of only multimappers
         make_iter_fastq(fastq_files, multimap_set, read_len)
 
         # align
-        subprocess.call('tophat -o thout%d -p %d -G %s --no-novel-juncs --transcriptome-index=txome -T %s iter.fq' % (read_len, options.num_threads, options.gtf_file, bowtie_index), shell=True)
+        subprocess.call('tophat -o thout%d -p %d -G %s --no-novel-juncs --transcriptome-index=txome %s iter.fq' % (read_len, options.num_threads, options.gtf_file, bowtie_index), shell=True)
 
         # parse BAM to split unique and store aligned and multimapped
         aligned_set, new_multimap_set = parse_iter_bam(read_len)
@@ -59,22 +60,39 @@ def main():
         multimap_set = new_multimap_set
 
         # for debug purposes for now
-        os.rename('iter.fq', 'thout%d/iter.fq' % read_len)
+        #os.rename('iter.fq', 'thout%d/iter.fq' % read_len)
 
     # save remaining multimappers
-    split_lost_multi(options.read_len_max, set())
+    split_lost_multi(full_read_length, set())
 
     # clean up
-    #os.remove('iter.fq')
+    os.remove('iter.fq')
 
     # combine all alignments
     bam_files = []
-    for read_len in range(options.initial_seed, options.read_len_max+1):
+    for read_len in range(options.initial_seed, full_read_length+1):
         bam_files.append('thout%d/unique.bam' % read_len)
         bam_files.append('thout%d/lost_multi.bam' % read_len)
     subprocess.call('samtools merge all.bam %s' % ' '.join(bam_files), shell=True)
 
 
+
+################################################################################
+# fastq_read_length
+#
+# Input
+#  fastq_file: fastq file name
+#
+# Output
+#  read length
+################################################################################
+def fastq_read_length(fastq_file):
+    fastq_in = open(fastq_file)    
+    header = fastq_in.readline()
+    seq = fastq_in.readline()
+    return len(seq)
+
+    
 ################################################################################
 # make_iter_fastq
 #
