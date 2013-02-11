@@ -39,6 +39,7 @@ def main():
 
     # find read length
     full_read_length = fastq_read_length(fastq_files[0])
+    print >> sys.stderr, 'Read length: %d' % full_read_length
 
     # initialize multimap set for first iteration
     multimap_set = None
