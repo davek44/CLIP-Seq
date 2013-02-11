@@ -41,31 +41,30 @@ def main():
     full_read_length = fastq_read_length(fastq_files[0])
     print >> sys.stderr, 'Read length: %d' % full_read_length
 
-    # initialize multimap set for first iteration
-    multimap_set = None
-
     for read_len in range(options.initial_seed, full_read_length+1):
-        # make a new fastq of only multimappers
-        make_iter_fastq(fastq_files, multimap_set, read_len)
+        # prepare fastq file
+        if read_len == options.initial_seed:
+            # trim reads
+            initial_fastq(fastq_files, read_len)
+        else:
+            # update fastq for multimappers and grow
+            update_fastq(fastq_files, read_len)
 
         # align
         subprocess.call('tophat -o thout%d -p %d -G %s --no-novel-juncs --transcriptome-index=%s %s iter.fq' % (read_len, options.num_threads, options.gtf_file, options.tx_index, bowtie_index), shell=True)
 
-        # parse BAM to split unique and store aligned and multimapped
-        aligned_set, new_multimap_set = parse_iter_bam(read_len)
+        # parse BAM to split unique and multimapped
+        split_iter_bam(read_len)
 
         # split lost multimappers from previous iteration
         if read_len > options.initial_seed:
-            split_lost_multi(read_len-1, aligned_set)
-
-        # update multimap set
-        multimap_set = new_multimap_set
+            split_lost_multi(read_len-1)
 
         # for debug purposes for now
         #os.rename('iter.fq', 'thout%d/iter.fq' % read_len)
 
     # save remaining multimappers
-    split_lost_multi(full_read_length, set())
+    split_lost_multi(full_read_length, write_all=True)
 
     # clean up
     os.remove('iter.fq')
@@ -76,7 +75,6 @@ def main():
         bam_files.append('thout%d/unique.bam' % read_len)
         bam_files.append('thout%d/lost_multi.bam' % read_len)
     subprocess.call('samtools merge all.bam %s' % ' '.join(bam_files), shell=True)
-
 
 
 ################################################################################
@@ -97,19 +95,18 @@ def fastq_read_length(fastq_file):
     seq = fastq_open.readline().rstrip()
     return len(seq)
 
-    
+
 ################################################################################
-# make_iter_fastq
+# initial_fastq
 #
 # Input
 #  fastq_files: List of fastq file names
-#  reads_set:   Set containing read headers for reads we want (or None for all)
 #  read_len:    Length to trim the reads to
 #
 # Output
-#  iter.fq:     New fastq file containing the trimmed reads we want
+#  iter.fq:     New fastq file containing trimmed reads.
 ################################################################################
-def make_iter_fastq(fastq_files, reads_set, read_len):
+def initial_fastq(fastq_files, read_len):
     out_fq = open('iter.fq', 'w')
 
     for fq_file in fastq_files:
@@ -124,11 +121,10 @@ def make_iter_fastq(fastq_files, reads_set, read_len):
             mid = fq_open.readline()
             qual = fq_open.readline()
 
-            if reads_set == None or header[1:].split()[0] in reads_set:
-                print >> out_fq, header.rstrip()
-                print >> out_fq, seq[:read_len].rstrip()
-                print >> out_fq, mid.rstrip()
-                print >> out_fq, qual[:read_len].rstrip()
+            print >> out_fq, header.rstrip()
+            print >> out_fq, seq[:read_len].rstrip()
+            print >> out_fq, '+'
+            print >> out_fq, qual[:read_len].rstrip()
 
             header = fq_open.readline()
         fq_open.close()
@@ -137,66 +133,110 @@ def make_iter_fastq(fastq_files, reads_set, read_len):
 
 
 ################################################################################
-# parse_iter_bam
+# split_iter_bam
 #
 # Input
 #  read_len: Trimmed read length used to find filenames
 #
 # Output
 #  unique.bam:   BAM file filtered for uniquely mapping reads
-#  aligned_set:  Set of aligned read headers
-#  multimap_set: Set of multimapping read headers
+#  multimap.bam: BAM file filtered for multimapping reads
 ################################################################################
-def parse_iter_bam(read_len):
-    # original bam for header
+def split_iter_bam(read_len):
+    # original BAM for header
     original_bam = pysam.Samfile('thout%d/accepted_hits.bam' % read_len, 'rb')
 
-    # initialize uniquely mapped read BAM file
+    # initialize split BAM files
     unique_bam = pysam.Samfile('thout%d/unique.bam' % read_len, 'wb', template=original_bam)
-
-    # initialize alignment sets
-    aligned_set = set()
-    multimap_set = set()
+    multimap_bam = pysam.Samfile('thout%d/multimap.bam' % read_len, 'wb', template=original_bam)
 
     for aligned_read in original_bam:
-        # save aligned read header
-        aligned_set.add(aligned_read.qname)
-
         if aligned_read.opt('NH') == 1:
-            # unique
             unique_bam.write(aligned_read)
-
         else:
-            # multimap
-            multimap_set.add(aligned_read.qname)
+            multimap_bam.write(aligned_read)
 
     unique_bam.close()
-
-    return aligned_set, multimap_set
+    multimap_bam.close()
 
 
 ################################################################################
 # split_lost_multi
 #
 # Input
-#  read_len:       Trimmed read length used to find filenames
-#  aligned_set:    Set of aligned read headers to detect lost multimappers
+#  read_len:       Trimmed read length used to find filenames. We're working in
+#                   the dir defined by read_len, by will use unmapped reads
+#                   from read_len+1
+#  write_all:      Write all multi-mappers regardless of unmapped_set
 #
 # Output
 #  lost_multi.bam: BAM file filtered for multimapping reads lost in the next iter
 ################################################################################
-def split_lost_multi(read_len, aligned_set):
-    # open original bam
-    original_bam = pysam.Samfile('thout%d/accepted_hits.bam' % read_len, 'rb')
+def split_lost_multi(read_len, write_all=False):
+    # store unmapped headers    
+    unmapped_set = set()
+    if write_all == False:
+        for aligned_read in pysam.Samfile('thout%d/unmapped.bam' % read_len+1, 'rb'):
+            unmapped_set.add(aligned_read.qname)
+
+    # open multimapping bam
+    multi_bam = pysam.Samfile('thout%d/multimap.bam' % read_len, 'rb')
 
     # initialize lost multi mapped read BAM file
-    lost_multi_bam = pysam.Samfile('thout%d/lost_multi.bam' % read_len, 'wb', template=original_bam)
+    lost_multi_bam = pysam.Samfile('thout%d/lost_multi.bam' % read_len, 'wb', template=multi_bam)
 
-    for aligned_read in original_bam:
-        if aligned_read.opt('NH') > 1 and aligned_read.qname not in aligned_set:
+    # print lost multis
+    for aligned_read in multi_bam:
+        if write_all or aligned_read.qname in unmapped_set:
             lost_multi_bam.write(aligned_read)
 
     lost_multi_bam.close()
+
+
+################################################################################
+# update_fastq
+#
+# Input
+#  fastq_files: List of fastq file names
+#  read_len:    Length to trim the reads to (and find prior multimaps)
+#
+# Output
+#  iter.fq:     New fastq file containing the trimmed reads we want
+################################################################################
+def update_fastq(fastq_files, read_len):
+    # store multi-mapping headers
+    subprocess.call('samtools view thout%d/multimap.bam | cut -f1 | sort -u | awk \'{print "@"$0}\' > multimap.txt' % (read_len-1), shell=True)
+
+    out_fq = open('iter.fq', 'w')
+
+    for fq_file in fastq_files:
+        # unzip maybe
+        multi_filter_cmd = 'cat %s' % fq_file
+        if fq_file[-2:] == 'gz':
+            multi_filter_cmd = 'gunzip -c %s' % fq_file
+
+        # grep for multimaps
+        multi_filter_cmd += ' | grep -A3 -F -w -f multimap.txt'
+
+        # filter and trim reads
+        p = subprocess.Popen(multi_filter_cmd, stdout=subprocess.PIPE, shell=True)
+        header = p.stdout.readline()
+        while header:
+            seq = p.stdout.readline()
+            mid = p.stdout.readline()
+            qual = p.stdout.readline()
+
+            print >> out_fq, header.rstrip()
+            print >> out_fq, seq[:read_len].rstrip()
+            print >> out_fq, mid.rstrip()
+            print >> out_fq, qual[:read_len].rstrip()
+
+            header = p.stdout.readline()
+        p.communicate()
+
+    out_fq.close()
+
+    os.remove('multimap.txt')
 
 
 ################################################################################
