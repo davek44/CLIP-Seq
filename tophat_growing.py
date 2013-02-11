@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 from optparse import OptionParser
-import copy, gzip, os, subprocess
+import copy, gzip, os, subprocess, sys
 import pysam
 
 ################################################################################
@@ -89,9 +89,12 @@ def main():
 #  read length
 ################################################################################
 def fastq_read_length(fastq_file):
-    fastq_in = open(fastq_file)    
-    header = fastq_in.readline()
-    seq = fastq_in.readline()
+    if fastq_file[-2:] == 'gz':
+        fastq_open = gzip.open(fastq_file)
+    else:
+        fastq_open = open(fastq_file)
+    header = fastq_open.readline()
+    seq = fastq_open.readline().rstrip()
     return len(seq)
 
     
