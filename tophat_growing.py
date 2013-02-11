@@ -26,6 +26,7 @@ def main():
     # tophat options
     parser.add_option('-p', '--num_threads', dest='num_threads', type='int', default=2, help='# of TopHat threads to launch [Default: %default]')
     parser.add_option('-G','--GTF', dest='gtf_file', help='Reference GTF file')
+    parser.add_option('--transcriptome-index', dest='tx_index', default='txome', help='Transcriptome bowtie2 index [Default: %default]')
     #parser.add_option('--no-novel-juncs', dest='no_novel_juncs', type='bool', action='store_true', help='Do not search for novel splice junctions [Default: %default]')
     (options,args) = parser.parse_args()
 
@@ -47,7 +48,7 @@ def main():
         make_iter_fastq(fastq_files, multimap_set, read_len)
 
         # align
-        subprocess.call('tophat -o thout%d -p %d -G %s --no-novel-juncs --transcriptome-index=txome %s iter.fq' % (read_len, options.num_threads, options.gtf_file, bowtie_index), shell=True)
+        subprocess.call('tophat -o thout%d -p %d -G %s --no-novel-juncs --transcriptome-index=%s %s iter.fq' % (read_len, options.num_threads, options.gtf_file, options.tx_index, bowtie_index), shell=True)
 
         # parse BAM to split unique and store aligned and multimapped
         aligned_set, new_multimap_set = parse_iter_bam(read_len)
