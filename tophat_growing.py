@@ -176,7 +176,7 @@ def split_lost_multi(read_len, write_all=False):
     # store unmapped headers    
     unmapped_set = set()
     if write_all == False:
-        for aligned_read in pysam.Samfile('thout%d/unmapped.bam' % read_len+1, 'rb'):
+        for aligned_read in pysam.Samfile('thout%d/unmapped.bam' % (read_len+1), 'rb'):
             unmapped_set.add(aligned_read.qname)
 
     # open multimapping bam
@@ -216,7 +216,7 @@ def update_fastq(fastq_files, read_len):
             multi_filter_cmd = 'gunzip -c %s' % fq_file
 
         # grep for multimaps
-        multi_filter_cmd += ' | grep -A3 -F -w -f multimap.txt'
+        multi_filter_cmd += ' | grep -A3 -F -w -f multimap.txt | grep -v "^--$"'
 
         # filter and trim reads
         p = subprocess.Popen(multi_filter_cmd, stdout=subprocess.PIPE, shell=True)
