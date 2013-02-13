@@ -41,14 +41,19 @@ def main():
     full_read_length = fastq_read_length(fastq_files[0])
     print >> sys.stderr, 'Read length: %d' % full_read_length
 
-    for read_len in range(options.initial_seed, full_read_length+1):
+    read_len = options.initial_seed
+    while read_len <= full_read_length:
         # prepare fastq file
         if read_len == options.initial_seed:
             # trim reads
             initial_fastq(fastq_files, read_len)
+            fastq_nonempty = True
         else:
             # update fastq for multimappers and grow
-            update_fastq(fastq_files, read_len)
+            fastq_nonempty = update_fastq(fastq_files, read_len)
+
+        if not fastq_nonempty:
+            break
 
         # align
         subprocess.call('tophat -o thout%d -p %d -G %s --no-novel-juncs --transcriptome-index=%s %s iter.fq' % (read_len, options.num_threads, options.gtf_file, options.tx_index, bowtie_index), shell=True)
@@ -63,17 +68,19 @@ def main():
         # for debug purposes for now
         #os.rename('iter.fq', 'thout%d/iter.fq' % read_len)
 
+        read_len += 1
+
     # save remaining multimappers
-    split_lost_multi(full_read_length, write_all=True)
+    split_lost_multi(read_len-1, write_all=True)
 
     # clean up
     os.remove('iter.fq')
 
     # combine all alignments
     bam_files = []
-    for read_len in range(options.initial_seed, full_read_length+1):
-        bam_files.append('thout%d/unique.bam' % read_len)
-        bam_files.append('thout%d/lost_multi.bam' % read_len)
+    for rl in range(options.initial_seed, read_len):
+        bam_files.append('thout%d/unique.bam' % rl)
+        bam_files.append('thout%d/lost_multi.bam' % rl)
     subprocess.call('samtools merge all.bam %s' % ' '.join(bam_files), shell=True)
 
 
@@ -81,7 +88,7 @@ def main():
 # fastq_read_length
 #
 # Input
-#  fastq_file: fastq file name
+#  fastq_file: Fastq file name
 #
 # Output
 #  read length
@@ -197,46 +204,54 @@ def split_lost_multi(read_len, write_all=False):
 # update_fastq
 #
 # Input
-#  fastq_files: List of fastq file names
-#  read_len:    Length to trim the reads to (and find prior multimaps)
+#  fastq_files:    List of fastq file names
+#  read_len:       Length to trim the reads to (and find prior multimaps)
 #
 # Output
-#  iter.fq:     New fastq file containing the trimmed reads we want
+#  iter.fq:        New fastq file containing the trimmed reads we want
+#  fastq_nonempty: True if the fastq file still contains reads.
 ################################################################################
 def update_fastq(fastq_files, read_len):
     # store multi-mapping headers
     subprocess.call('samtools view thout%d/multimap.bam | cut -f1 | sort -u | awk \'{print "@"$0}\' > multimap.txt' % (read_len-1), shell=True)
 
-    out_fq = open('iter.fq', 'w')
+    if os.path.getsize('multimap.txt') == 0:
+        fastq_nonempty = False
+    else:
+        fastq_nonempty = True
 
-    for fq_file in fastq_files:
-        # unzip maybe
-        multi_filter_cmd = 'cat %s' % fq_file
-        if fq_file[-2:] == 'gz':
-            multi_filter_cmd = 'gunzip -c %s' % fq_file
+        out_fq = open('iter.fq', 'w')
 
-        # grep for multimaps
-        multi_filter_cmd += ' | grep -A3 -F -w -f multimap.txt | grep -v "^--$"'
+        for fq_file in fastq_files:
+            # unzip maybe
+            multi_filter_cmd = 'cat %s' % fq_file
+            if fq_file[-2:] == 'gz':
+                multi_filter_cmd = 'gunzip -c %s' % fq_file
 
-        # filter and trim reads
-        p = subprocess.Popen(multi_filter_cmd, stdout=subprocess.PIPE, shell=True)
-        header = p.stdout.readline()
-        while header:
-            seq = p.stdout.readline()
-            mid = p.stdout.readline()
-            qual = p.stdout.readline()
+            # grep for multimaps
+            multi_filter_cmd += ' | grep -A3 -F -w -f multimap.txt | grep -v "^--$"'
 
-            print >> out_fq, header.rstrip()
-            print >> out_fq, seq[:read_len].rstrip()
-            print >> out_fq, mid.rstrip()
-            print >> out_fq, qual[:read_len].rstrip()
-
+            # filter and trim reads
+            p = subprocess.Popen(multi_filter_cmd, stdout=subprocess.PIPE, shell=True)
             header = p.stdout.readline()
-        p.communicate()
+            while header:
+                seq = p.stdout.readline()
+                mid = p.stdout.readline()
+                qual = p.stdout.readline()
 
-    out_fq.close()
+                print >> out_fq, header.rstrip()
+                print >> out_fq, seq[:read_len].rstrip()
+                print >> out_fq, mid.rstrip()
+                print >> out_fq, qual[:read_len].rstrip()
+
+                header = p.stdout.readline()
+            p.communicate()
+
+        out_fq.close()
 
     os.remove('multimap.txt')
+
+    return fastq_nonempty
 
 
 ################################################################################
