@@ -41,6 +41,9 @@ def main():
     full_read_length = fastq_read_length(fastq_files[0])
     print >> sys.stderr, 'Read length: %d' % full_read_length
 
+    # make a tmp dir for sorting
+    os.mkdir('tmp_sort')
+
     read_len = options.initial_seed
     while read_len <= full_read_length:
         # prepare fastq file
@@ -75,6 +78,7 @@ def main():
 
     # clean up
     os.remove('iter.fq')
+    os.rmdir('tmp_sort')
 
     # combine all alignments
     bam_files = []
@@ -213,7 +217,7 @@ def split_lost_multi(read_len, write_all=False):
 ################################################################################
 def update_fastq(fastq_files, read_len):
     # store multi-mapping headers
-    subprocess.call('samtools view thout%d/multimap.bam | cut -f1 | sort -u | awk \'{print "@"$0}\' > multimap.txt' % (read_len-1), shell=True)
+    subprocess.call('samtools view thout%d/multimap.bam | cut -f1 | sort -u -T tmp_sort | awk \'{print "@"$0}\' > multimap.txt' % (read_len-1), shell=True)
 
     if os.path.getsize('multimap.txt') == 0:
         fastq_nonempty = False
