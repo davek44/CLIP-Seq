@@ -186,7 +186,7 @@ def split_iter_bam(read_len):
 def split_lost_multi(read_len, write_all=False):
     # store unmapped headers    
     unmapped_set = set()
-    if write_all == False:
+    if write_all == False and os.path.isfile('thout%d/unmapped.bam' % (read_len+1)):
         for aligned_read in pysam.Samfile('thout%d/unmapped.bam' % (read_len+1), 'rb'):
             unmapped_set.add(aligned_read.qname)
 
