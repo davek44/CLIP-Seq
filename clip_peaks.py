@@ -28,13 +28,12 @@ def main():
 
     parser.add_option('-c', dest='control_bam', help='Control BAM file')
 
-    parser.add_option('--min_control_fpkm_exon', dest='min_control_fpkm_exon', type='float', default=0.50, help='Minimum FPKM to allow an exonic transcript from the control sequencing [Default: %default]')
-    parser.add_option('--min_control_fpkm_pre', dest='min_control_fpkm_pre', type='float', default=0.25, help='Minimum FPKM to allow a preRNA transcript from the control sequencing [Default: %default]')
+    parser.add_option('--min_control_fpkm', dest='min_control_fpkm', type='float', default=0.25, help='Minimum FPKM to allow the transcripts covering a window to take [Default: %default]')
 
     parser.add_option('-o', dest='out_dir', default='peaks', help='Output directory [Default: %default]')
 
     parser.add_option('-w', dest='window_size', type='int', default=50, help='Window size for scan statistic [Default: %default]')
-    parser.add_option('-p', dest='p_val', type='float', default=.001, help='P-value required of window scan statistic tests [Default: %default]')
+    parser.add_option('-p', dest='p_val', type='float', default=.01, help='P-value required of window scan statistic tests [Default: %default]')
 
     parser.add_option('--cuff_done', dest='cuff_done', action='store_true', default=False, help='A cufflinks run to estimate the model parameters is already done [Default: %default]')
     parser.add_option('-t', dest='threads', type='int', default=2, help='Number of threads to use [Default: %default]')
@@ -58,15 +57,22 @@ def main():
         # make a new gtf w/ unspliced RNAs
         pre_ref_gtf = prerna_gtf(ref_gtf, options.out_dir)
 
+        # store transcripts
+        transcripts = read_genes(pre_ref_gtf, key_id='transcript_id')
+        g2t = gff.g2t(pre_ref_gtf)
+
+        # set junctions
+        set_transcript_junctions(transcripts)
+
         # run Cufflinks on new gtf file and control BAM
         if not options.cuff_done:
             subprocess.call('cufflinks -o %s -p %d -G %s %s' % (options.out_dir, options.threads, pre_ref_gtf, options.control_bam), shell=True)
 
-        # store transcripts
-        transcripts = read_genes(ref_gtf, key_id='transcript_id')
+        # set FPKMs
+        set_transcript_fpkms(transcripts, options.out_dir)
 
         # set exon and preRNA FPKMs and filter for most expressed isoform
-        set_fpkm_control(transcripts, pre_ref_gtf)
+        #set_fpkm_control(transcripts, pre_ref_gtf)
     
     else:
         # make a new gtf file of only loci-spanning RNAs
@@ -88,9 +94,6 @@ def main():
     # compute # of tests we will perform
     txome_size = transcriptome_size(transcripts, options.window_size)
 
-    # raise low FPKMs to their minimums
-    floor_control_fpkms(transcripts, options.min_control_fpkm_exon, options.min_control_fpkm_pre)
-
 
     ############################################
     # process genes
@@ -102,37 +105,48 @@ def main():
     peaks_out = open('%s/peaks.gff' % options.out_dir, 'w')
     peak_id = 1
 
-    # for each span
-    for tid in transcripts:
-        tx = transcripts[tid]
+    # for each gene
+    for gene_id in g2t:
+
+        # make a more focused transcript hash for this gene
+        gene_transcripts = {}
+        for tid in g2t[gene_id]:
+            gene_transcripts[tid] = transcripts[tid]
+
+        # obtain basic gene attributes
+        (gchrom, gstrand, gstart, gend) = gene_attrs(gene_transcripts)
 
         # map reads to midpoints
-        read_midpoints = map_midpoints(clip_in, tx.chrom, tx.exons[0].start, tx.exons[-1].end, tx.strand)
+        read_midpoints = map_midpoints(clip_in, gchrom, gstart, gend, gstrand)
 
         # find splice junctions
-        junctions = map_splice_junctions(tx)
+        #junctions = map_splice_junctions(tx)
 
         # count reads and compute p-values in windows
-        window_stats = count_windows(clip_in, options.window_size, tx, read_midpoints, junctions, total_reads, txome_size)
+        window_stats = count_windows(clip_in, options.window_size, read_midpoints, gene_transcripts, gstart, gend, total_reads, txome_size)
 
         # post-process windows to peaks
-        peaks = windows2peaks(read_midpoints, junctions, window_stats, options.window_size, options.p_val, tx, total_reads, txome_size)
+        peaks = windows2peaks(read_midpoints, gene_transcripts, gene_start, window_stats, options.window_size, options.p_val, total_reads, txome_size)
 
         # output peaks
         for pstart, pend, pcount, ppval in peaks:
-            cols = [tx.chrom, 'clip_peaks', 'peak', str(pstart), str(pend), '.', tx.strand, '.', 'id "PEAK%d"; transcript_id "%s"; count "%d"; p "%.2e"' % (peak_id,tid,pcount,ppval)]
+            cols = [gchrom, 'clip_peaks', 'peak', str(pstart), str(pend), '.', gstrand, '.', 'id "PEAK%d"; gene_id "%s"; count "%d"; p "%.2e"' % (peak_id,gene_id,pcount,ppval)]
             print >> peaks_out, '\t'.join(cols)
             peak_id += 1
 
     clip_in.close()
     peaks_out.close()
-        
+
 
 ################################################################################
 # cigar_midpoint
 # 
-# Returned the aligned read's midpoint, considering the insertions and
-# deletions in its CIGAR string (which includes splicing).
+# Input
+#  aligned_read: pysam AlignedRead object.
+#
+# Output
+#  midpoint:     Midpoint of the alignment, considering the insertions and
+#                 deletions in its CIGAR string (which includes splicing).
 ################################################################################
 def cigar_midpoint(aligned_read):
     read_half = aligned_read.qlen / 2.0
@@ -170,52 +184,70 @@ def cigar_midpoint(aligned_read):
 # transcript's FPKM estimates.
 #
 # Recall that junctions contains the 1st bp of the next exon/intron.
+#
+# Input
+#  window_start:     Window start coordinate.
+#  window_end:       Window end coordinate.
+#  gene_transcripts: Hash mapping transcript_id to isoform Gene objects,
+#                     containing only keys for a specific gene.
+#  junctions_i:      Hash mapping transcript_id to the index of the first
+#                     junction ahead of the window start in that transcript's
+#                     junctions array.
+#  total_reads:      Total number of reads aligned to the transcriptome.
+# 
+# Output
+#  lambda:           Poisson lambda for this window.
 ################################################################################
-def convolute_lambda(window_start, window_end, fpkm_exon, fpkm_pre, total_reads, junctions, ji):
-    # after junctions
-    if ji >= len(junctions):
-        fpkm_conv = fpkm_exon+fpkm_pre
+def convolute_lambda(window_start, window_end, gene_transcripts, junctions_i, total_reads):
+#def convolute_lambda(window_start, window_end, fpkm_exon, fpkm_pre, total_reads, junctions, ji):
 
-    # next junction out of window
-    elif window_end < junctions[ji]:
-        if ji % 2 == 0:
-            fpkm_conv = fpkm_exon+fpkm_pre
+    # initialize FPKM
+    fpkm_conv = 0
+
+    # for each isoform
+    for tid in gene_transcripts:
+        # shortcuts
+        tx = gene_transcripts[tid]
+        ji = junctions_i[tid]
+
+        # determine transcript coefficient
+        tcoef = 0.0
+
+        # after junctions
+        if ji >= len(tx.junctions):
+            tcoef = 1.0
+
+        # next junction out of window
+        elif window_end < junctions[ji]:
+            if ji % 2 == 0: # in an exon
+                tcoef = 1.0
+
+        # junctions
         else:
-            fpkm_conv = fpkm_pre
-
-    # junctions
-    else:
-        # window start to first junction
-        if ji % 2 == 0: # exon
-            fpkm_conv = (junctions[ji]-window_start)*(fpkm_exon+fpkm_pre)        
-        else: # intron
-            fpkm_conv = (junctions[ji]-window_start)*fpkm_pre
-
-        # advance
-        ji += 1
-
-        # between junctions
-        while ji < len(junctions) and junctions[ji] <= window_end:
+            # window start to first junction
             if ji % 2 == 0: # exon
-                fpkm_conv += (junctions[ji]-junctions[ji-1])*(fpkm_exon+fpkm_pre)
-            else: # intron
-                fpkm_conv += (junctions[ji]-junctions[ji-1])*fpkm_pre
+                tcoef = junctions[ji] - window_start
 
+            # advance
             ji += 1
 
-        # back up
-        ji -= 1
+            # between junctions
+            while ji < len(tx.junctions) and tx.junctions[ji] <= window_end:
+                if ji % 2 == 0: # exon
+                    tcoef += junctions[ji] - junctions[ji-1]
+                ji += 1
 
-        # last junction to window end
-        if ji % 2 == 0: # intron
-            fpkm_conv += (window_end-junctions[ji]+1)*fpkm_pre
-        else: # exon
-            fpkm_conv += (window_end-junctions[ji]+1)*(fpkm_exon+fpkm_pre)
+            # back up
+            ji -= 1
 
-        # normalize
-        fpkm_conv /= float(window_end-window_start+1)
+            # last junction to window end
+            if ji % 2 == 1: # exon
+                tcoef += window_end - junctions[ji] + 1
 
-    return fpkm_conv/1000.0*(total_reads/1000000.0)
+            # normalize
+            tcoef /= float(window_end-window_start+1)
+
+    return tcoef * tx.fpkm / 1000.0*(total_reads/1000000.0)
 
 
 ################################################################################
@@ -223,18 +255,32 @@ def convolute_lambda(window_start, window_end, fpkm_exon, fpkm_pre, total_reads,
 #
 # Count the number of reads and compute the scan statistic p-value in each
 # window through the gene.
+#
+# Input
+#  clip_in:          Open pysam BAM file for clip-seq alignments.
+#  window_size:      Scan statistic window size.
+#  read_midpoints:   Sorted list of read alignment midpoints.
+#  gene_transcripts: Hash mapping transcript_id to isoform Gene objects,
+#                     containing only keys for a specific gene.
+#  gene_start:       Start of the gene's span.
+#  gene_end:         End of the gene's span.
+#  total_reads:      Total number of reads aligned to the transcriptome.
+#  txome_size:       Total number of bp in the transcriptome.
+#
+# Output
+#  window_stats:     List of tuples (alignment count, p value) for all windows.
 ################################################################################
-def count_windows(clip_in, window_size, tx, read_midpoints, junctions, total_reads, txome_size):
-    gene_start = tx.exons[0].start
-    gene_end = tx.exons[-1].end
-
+def count_windows(clip_in, window_size, read_midpoints, gene_transcripts, gene_start, gene_end, total_reads, txome_size):
     # set lambda using whole region (some day, compare this to the cufflinks estimate)
     # poisson_lambda = float(len(read_midpoints)) / (gene_end - gene_start)
 
     midpoints_window_start = 0 # index of the first read_midpoint that fit in the window (except I'm allowing 0)
     midpoints_window_end = 0 # index of the first read_midpoint past the window
 
-    junctions_i = 0 # index of the first junction ahead of the window start
+    # initialize index of the first junction ahead of the window start for each transcript
+    junctions_i = {}
+    for tid in gene_transcripts:
+        junctions_i[tid] = 0
 
     # to avoid redundant computation
     precomputed_pvals = {}
@@ -257,12 +303,14 @@ def count_windows(clip_in, window_size, tx, read_midpoints, junctions, total_rea
         # count reads
         window_count = midpoints_window_end - midpoints_window_start
 
-        # update junctions index (<= comparison because junctions holds the 1st bp of next exon/intron)
-        while junctions_i < len(junctions) and junctions[junctions_i] <= window_start:
-            junctions_i += 1
+        # update junctions indexes (<= comparison because junctions holds the 1st bp of next exon/intron)
+        for tid in gene_transcripts:
+            tjunctions = gene_transcripts[tid].junctions
+            while junctions_i[tid] < len(tjunctions) and tjunctions[junctions_i[tid]] <= window_start:
+                junctions_i[tid] += 1
 
         # set lambda
-        window_lambda = convolute_lambda(window_start, window_end, tx.fpkm_exon, tx.fpkm_pre, total_reads, junctions, junctions_i)
+        window_lambda = convolute_lambda(window_start, window_end, gene_transcripts, junctions_i, total_reads)
 
         # compute p-value
         if window_count > 2:
@@ -282,15 +330,34 @@ def count_windows(clip_in, window_size, tx, read_midpoints, junctions, total_rea
 
 
 ################################################################################
-# floor_control_fpkms
+# gene_attrs
 #
-# Raise low FPKMs to their minimums
+# Input
+#  gene_transcripts: Hash mapping transcript_id to isoform Gene objects,
+#                      containing only keys for a specific gene.
+#
+# Output
+#  gene_chrom:       Self explanatory...
+#  gene_strand:
+#  gene_start:
+#  gene_end:
 ################################################################################
-def floor_control_fpkms(transcripts, min_fpkm_exon, min_fpkm_pre):
-    for tid in transcripts:
-        tx = transcripts[tid]
-        tx.fpkm_exon = max(min_fpkm_exon, tx.fpkm_exon)
-        tx.fpkm_pre = max(min_fpkm_pre, tx.fpkm_pre)
+def gene_attrs(gene_transcripts):
+    gene_start = None
+    gene_end = None
+    for tx in gene_transcripts.values():
+        gene_chrom = tx.chrom
+        gene_strand = tx.strand
+        if gene_start == None:
+            gene_start = tx.exons[0].start
+        else:
+            gene_start = min(gene_start, tx.exons[0].start)
+        if gene_end == None:
+            gene_end = tx.exons[-1].end
+        else:
+            gene_end = max(gene_end, tx.exons[-1].end)
+
+    return gene_chrom, gene_strand, gene_start, gene_end
 
 
 ################################################################################
@@ -318,36 +385,27 @@ def get_gene_regions(ref_gtf):
 
 
 ################################################################################
-# map_splice_junctions
-#
-# Return a list of indexes mapping the splice junctions of the given
-# transcript Gene object.
-#
-# For each junction, save the first bp of the next exon/intron.
-################################################################################
-def map_splice_junctions(tx):
-    junctions = []
-    if len(tx.exons) > 1:
-        junctions.append(tx.exons[0].end+1)
-        for i in range(1,len(tx.exons)-1):
-            junctions.append(tx.exons[i].start)
-            junctions.append(tx.exons[i].end+1)
-        junctions.append(tx.exons[-1].start)
-    return junctions
-
-
-################################################################################
 # map_midpoints
 #
-# Map reads to their alignment midpoints, filtering for strand and quality.
-# Return a sorted list of midpoints.
+# Map reads from a gene of interest to their alignment midpoints, filtering for
+# strand and quality.
+#
+# Input
+#  clip_in:        Open pysam BAM file for clip-seq alignments.
+#  gene_chrom:     Chromosome of the gene of interest.
+#  gene_start:     Start coordinate of the gene of interest.
+#  gene_end:       End coordinate of the gene of interest.
+#  gene_strand:    Strand of the gene of interest.
+#
+# Output
+#  read_midpoints: Sorted list of read alignment midpoints.
 ################################################################################
-def map_midpoints(clip_in, chrom, gene_start, gene_end, gene_strand):
+def map_midpoints(clip_in, gene_chrom, gene_start, gene_end, gene_strand):
     read_midpoints = []
 
-    if chrom in clip_in.references:
+    if gene_chrom in clip_in.references:
         # for each read in span
-        for aligned_read in clip_in.fetch(chrom, gene_start, gene_end):
+        for aligned_read in clip_in.fetch(gene_chrom, gene_start, gene_end):
             ar_strand = '+'
             if aligned_read.is_reverse:
                 ar_strand = '-'
@@ -369,6 +427,15 @@ def map_midpoints(clip_in, chrom, gene_start, gene_end, gene_strand):
 #
 # Merge the given trimmed windows with counts using bedtools and then recount
 # the reads in the new intervals.
+#
+# Input
+#  trimmed_windows_counts: List of (start,end) tuples for significant windows,
+#                           trimmed to be tight around read midpoints.
+#  read_midpoints:         Sorted list of read alignment midpoints.
+#
+# Output
+#  peaks:                  List of (start,end,count) tuples for significant
+#                           trimmed and merged windows
 ################################################################################
 def merge_peaks_count(trimmed_windows_counts, read_midpoints):
     # create BED intervals
@@ -400,6 +467,16 @@ def merge_peaks_count(trimmed_windows_counts, read_midpoints):
 # merge_windows
 #
 # Merge adjacent significant windows and save index tuples.
+#
+# Input
+#  window_stats:    Counts and p-values for each window.
+#  window_size:     Scan statistic window size.
+#  sig_p:           P-value at which to call window counts significant.
+#  gene_start:      Start of the gene's span.
+#  allowed_sig_gap: Max gap size between significant windows to perform a merge.
+#
+# Output
+#  merged_windows:  List of (start,end) tuples for merged significant windows.
 ################################################################################
 def merge_windows(window_stats, window_size, sig_p, gene_start, allowed_sig_gap = 1):
     merged_windows = []
@@ -436,12 +513,27 @@ def merge_windows(window_stats, window_size, sig_p, gene_start, allowed_sig_gap 
 # peak_stats
 #
 # Compute a new p-value for the final peak.
+#
+# Input
+#  windows_counts:   List of (start,end,count) tuples for significant trimmed
+#                     and merged windows.
+#  gene_transcripts: Hash mapping transcript_id to isoform Gene objects,
+#                     containing only keys for a specific gene.
+#  total_reads:      Total number of reads aligned to the transcriptome.
+#  txome_size:       Total number of bp in the transcriptome.
+#
+# Output
+#  peaks:            List of (start,end,count,p-val) tuples for peaks.
 ################################################################################
-def peak_stats(windows_counts, junctions, total_reads, txome_size, fpkm_exon, fpkm_pre):
+def peak_stats(windows_counts, gene_transcripts, total_reads, txome_size):
     peaks = []
     for wstart, wend, wcount in windows_counts:
-        junctions_i = bisect_left(junctions, wstart)
-        peak_lambda = convolute_lambda(wstart, wend, fpkm_exon, fpkm_pre, total_reads, junctions, junctions_i)
+        # set index of the first junction ahead of the window start for each transcript
+        junctions_i = {}
+        for tid in gene_transcripts:
+            junctions_i[tid] = bisect_left(gene_transcripts[tid].junctions, wstart)
+
+        peak_lambda = convolute_lambda(wstart, wend, gene_transcripts, junctions_i, total_reads)
         p_val = scan_stat_approx3(wcount, wend-wstart+1, txome_size, peak_lambda)
         peaks.append((wstart,wend,wcount,p_val))
     return peaks
@@ -452,6 +544,14 @@ def peak_stats(windows_counts, junctions, total_reads, txome_size, fpkm_exon, fp
 #
 # Add unspliced preRNAs to the gtf file, focus on exons, and remove
 # redundancies.
+#
+# Input
+#  ref_gtf:     Reference GTF file to expand with unspliced preRNAs.
+#  out_dir:     Directory in which to output the expanded GTF file.
+#
+# Output
+#  prerna.gtf:  Expanded GTF file.
+#  pre_ref_gtf: The filename of the expanded GTF file.
 ################################################################################
 def prerna_gtf(ref_gtf, out_dir):
     unspliced_index = 0
@@ -498,8 +598,15 @@ def prerna_gtf(ref_gtf, out_dir):
 #
 # Parse a gtf file and return a set of Gene objects in a hash keyed by the
 # id given.
+#
+# Input
+#  gtf_file: GTF file from which to read genes.
+#  key_id:   GTF key with which to hash the genes (transcript_id or gene_id)
+#
+# Output
+#  genes:    Hash mapping key_id to Gene objects.
 ################################################################################
-def read_genes(gtf_file, key_id='transcript_id', sort=True):
+def read_genes(gtf_file, key_id='transcript_id'):
     genes = {}
     for line in open(gtf_file):
         a = line.split('\t')
@@ -652,10 +759,57 @@ def set_fpkm_span(ref_transcripts):
 
 
 ################################################################################
+# set_transcript_fpkms
+#
+# Input
+#  transcripts: Hash mapping transcript_id to isoform Gene objects.
+#  out_dir:     Directory in which to output the gene span GTF file.
+# 
+# Output
+#  transcripts: Same hash, FPKM attribute set.
+################################################################################
+def set_transcript_fpkms(transcripts, out_dir):
+    for line in open('%s/isoforms.fpkm_tracking' % out_dir):
+        a = line.split('\t')
+        a[-1] = a[-1].rstrip()
+
+        tid = a[0]
+        fpkm = float(a[9])
+
+        transcripts[tid].fpkm = fpkm
+
+
+################################################################################
+# set_transcript_junctions
+#
+# Input
+#  transcripts: Hash mapping transcript_id to isoform Gene objects.
+# 
+# Output
+#  transcripts:  Same hash, junctions attribute set.
+#  tx.junctions: Sorted list of junction coordinates. For each junction, save
+#                 the first bp of the next exon/intron.
+################################################################################
+def set_transcript_junctions(transcripts):
+    for tx in transcipts:
+        if len(tx.exons) > 1:
+            tx.junctions.append(tx.exons[0].end+1)
+            for i in range(1,len(tx.exons)-1):
+                tx.junctions.append(tx.exons[i].start)
+                tx.junctions.append(tx.exons[i].end+1)
+            tx.junctions.append(tx.exons[-1].start)
+
+
+################################################################################
 # span_gtf
 #
-# Add unspliced preRNAs to the gtf file, focus on exons, and remove
-# redundancies.
+# Input
+#  ref_gtf:      Reference GTF file to convert to gene spans.
+#  out_dir:      Directory in which to output the gene span GTF file.
+#
+# Output
+#  span.gtf:     Gene span GTF file.
+#  span_ref_gtf: The filename of the gene span GTF file.
 ################################################################################
 def span_gtf(ref_gtf, out_dir):
     # obtain gene regions
@@ -690,17 +844,22 @@ def transcriptome_size(transcripts, window_size):
 
 
 ################################################################################
-# trim_windows_count
+# trim_windows
 #
-# Trim each window to be tight around read midpoints.
+# Input
+#  windows:        List of (start,end) tuples for merged significant windows.
+#  read_midpoints: Sorted list of read alignment midpoints.
+#
+# Output
+#  trimmed_windows: List of (start,end) tuples for significant windows, trimmed
+#                    to be tight around read midpoints.
 ################################################################################
-def trim_windows_count(windows, read_midpoints):
+def trim_windows(windows, read_midpoints):
     trimmed_windows = []
     for wstart, wend in windows:
         trim_start_i = bisect_left(read_midpoints, wstart)
         trim_end_i = bisect_right(read_midpoints, wend)
-        read_count = trim_end_i - trim_start_i
-        trimmed_windows.append((int(read_midpoints[trim_start_i]), int(read_midpoints[trim_end_i-1]+0.5), read_count))
+        trimmed_windows.append((int(read_midpoints[trim_start_i]), int(read_midpoints[trim_end_i-1]+0.5)))
     return trimmed_windows
 
 
@@ -708,12 +867,26 @@ def trim_windows_count(windows, read_midpoints):
 # windows2peaks
 #
 # Convert window counts and p-values to peak calls.
+#
+# Input
+#  read_midpoints:   Sorted list of read alignment midpoints.
+#  gene_transcripts: Hash mapping transcript_id to isoform Gene objects,
+#                     containing only keys for a specific gene.
+#  gene_start:       Start of the gene's span.
+#  window_stats:     Counts and p-values for each window.
+#  window_size:      Scan statistic window size.
+#  sig_p:            P-value at which to call window counts significant.
+#  total_reads:      Total number of reads aligned to the transcriptome.
+#  txome_size:       Total number of bp in the transcriptome.
+#
+# Output
+#  peaks:            List of (start,end,count,p-val) tuples for peaks.
 ################################################################################
-def windows2peaks(read_midpoints, junctions, window_stats, window_size, sig_p, tx, total_reads, txome_size):
-    merged_windows = merge_windows(window_stats, window_size, sig_p, tx.exons[0].start)
-    trimmed_windows_counts = trim_windows_count(merged_windows, read_midpoints)
+def windows2peaks(read_midpoints, gene_transcripts, gene_start, window_stats, window_size, sig_p, total_reads, txome_size):
+    merged_windows = merge_windows(window_stats, window_size, sig_p, gene_start)
+    trimmed_windows = trim_windows(merged_windows, read_midpoints)
     statless_peaks = merge_peaks_count(trimmed_windows_counts, read_midpoints)
-    peaks = peak_stats(statless_peaks, junctions, total_reads, txome_size, tx.fpkm_exon, tx.fpkm_pre)
+    peaks = peak_stats(statless_peaks, gene_transcripts, total_reads, txome_size)
     return peaks
 
 
@@ -727,8 +900,8 @@ class Gene:
         self.kv = kv
         self.exons = []
 
-        self.fpkm_exon = None
-        self.fpkm_pre = None
+        self.fpkm = None
+        self.junctions = []
 
     def add_exon(self, start, end):
         self.exons.append(Exon(start,end))
