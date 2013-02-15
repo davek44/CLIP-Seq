@@ -247,7 +247,11 @@ def convolute_lambda(window_start, window_end, gene_transcripts, junctions_i, to
             # normalize
             tcoef /= float(window_end-window_start+1)
 
-    return tcoef * tx.fpkm / 1000.0*(total_reads/1000000.0)
+        # add to fpkm
+        fpkm_conv += tcoef * tx.fpkm
+
+    # convert from fpkm to lambda
+    return fpkm_conv / 1000.0*(total_reads/1000000.0)
 
 
 ################################################################################
