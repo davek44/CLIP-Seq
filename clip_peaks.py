@@ -28,7 +28,7 @@ def main():
 
     parser.add_option('-c', dest='control_bam', help='Control BAM file')
 
-    parser.add_option('--min_control_fpkm', dest='min_control_fpkm', type='float', default=0.25, help='Minimum FPKM to allow the transcripts covering a window to take [Default: %default]')
+    #parser.add_option('--min_control_fpkm', dest='min_control_fpkm', type='float', default=0.25, help='Minimum FPKM to allow the transcripts covering a window to take [Default: %default]')
 
     parser.add_option('-o', dest='out_dir', default='peaks', help='Output directory [Default: %default]')
 
@@ -249,6 +249,9 @@ def convolute_lambda(window_start, window_end, gene_transcripts, junctions_i, to
 
         # add to fpkm
         fpkm_conv += tcoef * tx.fpkm
+
+    # bump to min fpkm
+    fpkm_conv = max(fpkm_conv, 0.1)
 
     # convert from fpkm to lambda
     return fpkm_conv / 1000.0*(total_reads/1000000.0)
