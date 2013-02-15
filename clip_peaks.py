@@ -218,7 +218,7 @@ def convolute_lambda(window_start, window_end, gene_transcripts, junctions_i, to
             tcoef = 1.0
 
         # next junction out of window
-        elif window_end < junctions[ji]:
+        elif window_end < tx.junctions[ji]:
             if ji % 2 == 0: # in an exon
                 tcoef = 1.0
 
@@ -226,7 +226,7 @@ def convolute_lambda(window_start, window_end, gene_transcripts, junctions_i, to
         else:
             # window start to first junction
             if ji % 2 == 0: # exon
-                tcoef = junctions[ji] - window_start
+                tcoef = tx.junctions[ji] - window_start
 
             # advance
             ji += 1
@@ -234,7 +234,7 @@ def convolute_lambda(window_start, window_end, gene_transcripts, junctions_i, to
             # between junctions
             while ji < len(tx.junctions) and tx.junctions[ji] <= window_end:
                 if ji % 2 == 0: # exon
-                    tcoef += junctions[ji] - junctions[ji-1]
+                    tcoef += tx.junctions[ji] - tx.junctions[ji-1]
                 ji += 1
 
             # back up
@@ -242,7 +242,7 @@ def convolute_lambda(window_start, window_end, gene_transcripts, junctions_i, to
 
             # last junction to window end
             if ji % 2 == 1: # exon
-                tcoef += window_end - junctions[ji] + 1
+                tcoef += window_end - tx.junctions[ji] + 1
 
             # normalize
             tcoef /= float(window_end-window_start+1)
@@ -433,18 +433,18 @@ def map_midpoints(clip_in, gene_chrom, gene_start, gene_end, gene_strand):
 # the reads in the new intervals.
 #
 # Input
-#  trimmed_windows_counts: List of (start,end) tuples for significant windows,
-#                           trimmed to be tight around read midpoints.
-#  read_midpoints:         Sorted list of read alignment midpoints.
+#  trimmed_windows: List of (start,end) tuples for significant windows, trimmed
+#                    to be tight around read midpoints.
+#  read_midpoints:  Sorted list of read alignment midpoints.
 #
 # Output
-#  peaks:                  List of (start,end,count) tuples for significant
-#                           trimmed and merged windows
+#  peaks:           List of (start,end,count) tuples for significant trimmed
+#                    and merged windows
 ################################################################################
-def merge_peaks_count(trimmed_windows_counts, read_midpoints):
+def merge_peaks_count(trimmed_windows, read_midpoints):
     # create BED intervals
     bed_intervals = []
-    for wstart, wend, wcount in trimmed_windows_counts:
+    for wstart, wend in trimmed_windows:
         bed_a = ['chrFAKE', str(wstart-1), str(wend)]
         bed_intervals.append(pybedtools.create_interval_from_list(bed_a))
     bedtool = pybedtools.BedTool(bed_intervals)
@@ -889,7 +889,7 @@ def trim_windows(windows, read_midpoints):
 def windows2peaks(read_midpoints, gene_transcripts, gene_start, window_stats, window_size, sig_p, total_reads, txome_size):
     merged_windows = merge_windows(window_stats, window_size, sig_p, gene_start)
     trimmed_windows = trim_windows(merged_windows, read_midpoints)
-    statless_peaks = merge_peaks_count(trimmed_windows_counts, read_midpoints)
+    statless_peaks = merge_peaks_count(trimmed_windows, read_midpoints)
     peaks = peak_stats(statless_peaks, gene_transcripts, total_reads, txome_size)
     return peaks
 
