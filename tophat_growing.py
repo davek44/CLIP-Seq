@@ -17,7 +17,7 @@ import pysam
 # main
 ################################################################################
 def main():
-    usage = 'usage: %prog [options] <bowtie index> <reads1[,reads2,...]>'
+    usage = 'usage: %prog [options] <bowtie index> <reads1> [<reads2> ...]'
     parser = OptionParser(usage)
 
     # shrinking options
@@ -35,7 +35,7 @@ def main():
         parser.error(usage)
     else:
         bowtie_index = args[0]
-        fastq_files = args[1].split(',')
+        fastq_files = args[1:]
 
     # find read length
     full_read_length = fastq_read_length(fastq_files[0])
