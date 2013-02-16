@@ -97,6 +97,7 @@ def main():
     # clean up
     os.remove('iter.fq')
     os.remove('multimap.txt')
+    os.remove('multimap.bf')
     os.rmdir('tmp_sort')
 
 
