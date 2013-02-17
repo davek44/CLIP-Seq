@@ -115,7 +115,7 @@ def construct_bloomfilter(read_len):
     subprocess.call('samtools view thout%d/accepted_hits.bam | grep -v -w "NH:i:1" | cut -f1 | sort -u -T tmp_sort > multimap.txt' % read_len, shell=True)
 
     # count multimappers
-    multimap_count = int(subprocess.check_output('wc -l multimap.txt', shell=True))
+    multimap_count = int(subprocess.check_output('wc -l multimap.txt', shell=True).split()[0])
 
     if multimap_count == 0:
         multimap_bf = None
