@@ -88,7 +88,7 @@ def main():
     # conclusion
     ############################################
     # combine all alignments
-    bam_files = ['thout%d/accepted_hits.bam' % read_len]
+    bam_files = ['thout%d/accepted_hits.bam' % read_len-1]
     for rl in range(options.initial_seed, read_len-1):
         bam_files.append('thout%d/unique.bam' % rl)
         bam_files.append('thout%d/lost_multi.bam' % rl)
