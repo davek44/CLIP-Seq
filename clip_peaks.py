@@ -776,6 +776,7 @@ def set_fpkm_span(ref_transcripts):
 #  transcripts: Same hash, FPKM attribute set.
 ################################################################################
 def set_transcript_fpkms(transcripts, out_dir):
+    # read from isoforms.fpkm_tracking
     fpkm_in = open('%s/isoforms.fpkm_tracking' % out_dir)
     line = fpkm_in.readline()
     for line in fpkm_in:
@@ -786,6 +787,13 @@ def set_transcript_fpkms(transcripts, out_dir):
         fpkm = float(a[9])
 
         transcripts[tid].fpkm = fpkm
+    fpkm_in.close()
+
+    # fill in those that go missing
+    for tid in transcripts:
+        if transcripts[tid].fpkm == None:
+            print >> sys.stderr, 'WARNING: Missing FPKM for %s' % tid
+            transcripts[tid].fpkm = 0
 
 
 ################################################################################
