@@ -27,11 +27,19 @@ class TestConvoluteLambda(unittest.TestCase):
         self.window_size = 4
         self.total_reads = 100
 
-    def compute_lambdas(self, gene_len):
+
+    ############################################################
+    # compute_code_lambdas
+    ############################################################
+    def compute_code_lambdas(self):
+        # initialize
         code_lambda = []
         ji = {}
         for tid in self.gene_transcripts:
             ji[tid] = 0
+            
+        # for each window
+        gene_len = len(self.isoform1.labels)
         for window_start in range(1,gene_len-self.window_size+2):
             # update junctions index
             for tid in self.gene_transcripts:
@@ -46,88 +54,116 @@ class TestConvoluteLambda(unittest.TestCase):
 
         return code_lambda
 
-    def test0(self):
-        # no junctions
-        isoform1 = 'EEEEEEEE'
-        #           ....
-        isoform1_exon_counts = [4]*5
 
-        self.isoform1.junctions = []
+    ############################################################
+    # compute_true_lambdas
+    #
+    # Compute lambdas rigorously.
+    ############################################################
+    def compute_true_lambdas(self):
+        isoforms = self.gene_transcripts.values()
 
-        # iniitialize lambdas
-        true_lambda = [0]*len(isoform1_exon_counts)
+        # initialize
+        true_lambda = [0.0]*(len(isoforms[0].labels)-self.window_size+1)
 
-        # add isoform1 to lambda
-        for i in range(len(isoform1_exon_counts)):
-            ec = isoform1_exon_counts[i]
-            true_lambda[i] += float(ec)/self.window_size*self.isoform1.fpkm
-
-        # add pre_isoform1 to lambda
-        for i in range(len(isoform1_exon_counts)):
-            true_lambda[i] += self.pre_isoform1.fpkm
+        # consider each isoform
+        for isoform in isoforms:
+            exon_counts = self.count_exons(isoform.labels)
+            for i in range(len(exon_counts)):
+                true_lambda[i] += float(exon_counts[i])/self.window_size*isoform.fpkm
 
         # normalize to lambda
         true_lambda = [fpkm/1000.0*self.total_reads/1000000.0 for fpkm in true_lambda]
 
-        code_lambda = self.compute_lambdas(len(isoform1))
+        return true_lambda
+
+
+    ############################################################
+    # count_exons
+    # 
+    # Count the number of exon bp in each window
+    # across the transcript.
+    ############################################################
+    def count_exons(self, transcript):
+        exon_counts = [0]*(len(transcript)-self.window_size+1)
+        for i in range(len(exon_counts)):
+            for j in range(i,i+self.window_size):
+                exon_counts[i] += int(transcript[j] == 'E')
+        return exon_counts
+
+
+    ############################################################
+    # find_junctions
+    # 
+    # Find the 1-based indexes of the exon-intron junctions
+    # in the given transcript.
+    ############################################################
+    def find_junctions(self, transcript):
+        junctions = []
+        for i in range(1,len(transcript)):
+            if transcript[i] != transcript[i-1]:
+                junctions.append(i+1)
+        return junctions
+
+
+    ############################################################
+    def test0(self):
+        # no junctions
+        self.isoform1.labels = 'EEEEEEEE'
+        self.isoform1.junctions = self.find_junctions(self.isoform1.labels)
+        self.pre_isoform1.labels = 'E'*len(self.isoform1.labels)
+
+        true_lambda = self.compute_true_lambdas()
+        code_lambda = self.compute_code_lambdas()
 
         self.assertEqual(len(true_lambda),len(code_lambda))
         for i in range(len(true_lambda)):
             self.assertEqual(true_lambda[i], code_lambda[i])
 
+    ############################################################
     def test1(self):
         # bunch of junctions
-        isoform1 = 'EEEEEEIIIEEIIIIIIEEE'
-        #               ....
-        isoform1_exon_counts = [4,4,4,3,2,1,1,2,2,2,1,0,0,0,1,2,3]
+        self.isoform1.labels = 'EEEEEEIIIEEIIIIIIEEE'
+        self.isoform1.junctions = self.find_junctions(self.isoform1.labels)
+        self.pre_isoform1.labels = 'E'*len(self.isoform1.labels)
 
-        self.isoform1.junctions = [7,10,12,18]
-
-        # iniitialize lambdas
-        true_lambda = [0]*len(isoform1_exon_counts)
-
-        # add isoform1 to lambda
-        for i in range(len(isoform1_exon_counts)):
-            ec = isoform1_exon_counts[i]
-            true_lambda[i] += float(ec)/self.window_size*self.isoform1.fpkm
-
-        # add pre_isoform1 to lambda
-        for i in range(len(isoform1_exon_counts)):
-            true_lambda[i] += self.pre_isoform1.fpkm
-
-        # normalize to lambda
-        true_lambda = [fpkm/1000.0*self.total_reads/1000000.0 for fpkm in true_lambda]
-
-        code_lambda = self.compute_lambdas(len(isoform1))
+        true_lambda = self.compute_true_lambdas()
+        code_lambda = self.compute_code_lambdas()
 
         self.assertEqual(len(true_lambda),len(code_lambda))
         for i in range(len(true_lambda)):
             self.assertTrue(abs(true_lambda[i] - code_lambda[i]) < 1e-9)
 
+    ############################################################
     def test2(self):
         # bunch of junctions
-        isoform1 = 'EEEIIIIIIEEIIIEEEEEE'
-        #                       ....        
-        isoform1_exon_counts = [3,2,1,0,0,0,1,2,2,2,1,1,2,3,4,4,4]
+        self.isoform1.labels = 'EEEIIIIIIEEIIIEEEEEE'
+        self.isoform1.junctions = self.find_junctions(self.isoform1.labels)
+        self.pre_isoform1.labels = 'E'*len(self.isoform1.labels)
 
-        self.isoform1.junctions = [4,10,12,15]
+        true_lambda = self.compute_true_lambdas()
+        code_lambda = self.compute_code_lambdas()
 
-        # iniitialize lambdas
-        true_lambda = [0]*len(isoform1_exon_counts)
+        self.assertEqual(len(true_lambda),len(code_lambda))
+        for i in range(len(true_lambda)):
+            self.assertTrue(abs(true_lambda[i] - code_lambda[i]) < 1e-9)
 
-        # add isoform1 to lambda
-        for i in range(len(isoform1_exon_counts)):
-            ec = isoform1_exon_counts[i]
-            true_lambda[i] += float(ec)/self.window_size*self.isoform1.fpkm
+    ############################################################
+    def test3(self):
+        self.isoform1.labels = 'EEEIIIIIIEEIIIEEEEEE'
+        self.isoform1.junctions = self.find_junctions(self.isoform1.labels)
 
-        # add pre_isoform1 to lambda
-        for i in range(len(isoform1_exon_counts)):
-            true_lambda[i] += self.pre_isoform1.fpkm
+        self.isoform2 = clip_peaks.Gene('chr1', '+', {})
+        self.isoform2.fpkm = 3
+        self.isoform2.labels = 'EEEIIIIIEEIIIIEEEEEE'
+        self.isoform2.junctions = self.find_junctions(self.isoform2.labels)
 
-        # normalize to lambda
-        true_lambda = [fpkm/1000.0*self.total_reads/1000000.0 for fpkm in true_lambda]
+        self.pre_isoform1.labels = 'E'*len(self.isoform1.labels)
 
-        code_lambda = self.compute_lambdas(len(isoform1))
+        self.gene_transcripts = {'isoform1':self.isoform1, 'isoform2':self.isoform2, 'pre_isoform1':self.pre_isoform1}
+        
+        true_lambda = self.compute_true_lambdas()
+        code_lambda = self.compute_code_lambdas()
 
         self.assertEqual(len(true_lambda),len(code_lambda))
         for i in range(len(true_lambda)):
