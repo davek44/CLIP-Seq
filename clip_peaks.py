@@ -798,7 +798,8 @@ def set_transcript_fpkms(transcripts, out_dir):
 #                 the first bp of the next exon/intron.
 ################################################################################
 def set_transcript_junctions(transcripts):
-    for tx in transcripts:
+    for tid in transcripts:
+        tx = transcripts[tid]
         if len(tx.exons) > 1:
             tx.junctions.append(tx.exons[0].end+1)
             for i in range(1,len(tx.exons)-1):
