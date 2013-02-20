@@ -776,7 +776,9 @@ def set_fpkm_span(ref_transcripts):
 #  transcripts: Same hash, FPKM attribute set.
 ################################################################################
 def set_transcript_fpkms(transcripts, out_dir):
-    for line in open('%s/isoforms.fpkm_tracking' % out_dir):
+    fpkm_in = open('%s/isoforms.fpkm_tracking' % out_dir)
+    line = fpkm_in.readline()
+    for line in fpkm_in:
         a = line.split('\t')
         a[-1] = a[-1].rstrip()
 
