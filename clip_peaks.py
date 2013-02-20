@@ -126,7 +126,7 @@ def main():
         window_stats = count_windows(clip_in, options.window_size, read_midpoints, gene_transcripts, gstart, gend, total_reads, txome_size)
 
         # post-process windows to peaks
-        peaks = windows2peaks(read_midpoints, gene_transcripts, gene_start, window_stats, options.window_size, options.p_val, total_reads, txome_size)
+        peaks = windows2peaks(read_midpoints, gene_transcripts, gstart, window_stats, options.window_size, options.p_val, total_reads, txome_size)
 
         # output peaks
         for pstart, pend, pcount, ppval in peaks:
