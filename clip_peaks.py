@@ -130,7 +130,8 @@ def main():
 
         # output peaks
         for pstart, pend, pcount, ppval in peaks:
-            cols = [gchrom, 'clip_peaks', 'peak', str(pstart), str(pend), '.', gstrand, '.', 'id "PEAK%d"; gene_id "%s"; count "%d"; p "%.2e"' % (peak_id,gene_id,pcount,ppval)]
+            peak_score = int(2000/math.pi*math.atan(-math.log(ppval,1000)))
+            cols = [gchrom, 'clip_peaks', 'peak', str(pstart), str(pend), str(peak_score), gstrand, '.', 'id "PEAK%d"; gene_id "%s"; count "%d"; p "%.2e"' % (peak_id,gene_id,pcount,ppval)]
             print >> peaks_out, '\t'.join(cols)
             peak_id += 1
 
