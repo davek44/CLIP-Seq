@@ -370,13 +370,17 @@ def gene_attrs(gene_transcripts):
 ################################################################################
 # get_gene_regions
 #
-# Return a hash of gene_id's mapping to lists consisting of (chromosome, start,
-# end, strand). Coordinates are GTF format.
+# Return a 
+#
+# Input:
+#  transcripts:  Hash mapping transcript_id keys to Gene class instances.
+#
+# Output:
+#  gene_regions: Hash mapping gene_id keys to lists consisting of (chromosome,
+#                start, end, strand) tuples with coordinates in GTF format.
 ################################################################################
-def get_gene_regions(ref_gtf):
+def get_gene_regions(transcripts):
     gene_regions = {}
-
-    transcripts = read_genes(ref_gtf, key_id='transcript_id')
 
     for tid in transcripts:
         tx = transcripts[tid]
@@ -831,7 +835,8 @@ def set_transcript_junctions(transcripts):
 ################################################################################
 def span_gtf(ref_gtf, out_dir):
     # obtain gene regions
-    gene_regions = get_gene_regions(ref_gtf)
+    transcripts = read_genes(ref_gtf, key_id='transcript_id')
+    gene_regions = get_gene_regions(transcripts)
 
     # print
     span_ref_gtf = '%s/span.gtf' % out_dir
@@ -854,10 +859,13 @@ def span_gtf(ref_gtf, out_dir):
 # the transcriptome with window_size's subtracted.
 ################################################################################
 def transcriptome_size(transcripts, window_size):
+    gene_regions = get_gene_regions(transcripts)
+
     txome_size = 0
-    for tid in transcripts:
-        tx = transcripts[tid]
-        txome_size += tx.exons[-1].end - tx.exons[0].start - window_size + 1
+    for gene_id in gene_regions:
+        (gchrom,gstart,gend,gstrand) = gene_regions[gene_id]
+        txome_size += gend - gstart - window_size + 1
+
     return txome_size
 
 
