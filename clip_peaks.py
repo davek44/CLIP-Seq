@@ -53,40 +53,30 @@ def main():
     # parameterize
     ############################################
     if options.control_bam:
-
         # make a new gtf w/ unspliced RNAs
-        pre_ref_gtf = prerna_gtf(ref_gtf, options.out_dir)
-
-        # store transcripts
-        transcripts = read_genes(pre_ref_gtf, key_id='transcript_id')
-        g2t = gff.g2t(pre_ref_gtf)
-
-        # set junctions
-        set_transcript_junctions(transcripts)
+        update_ref_gtf = prerna_gtf(ref_gtf, options.out_dir)
 
         # run Cufflinks on new gtf file and control BAM
         if not options.cuff_done:
-            subprocess.call('cufflinks -o %s -p %d -G %s %s' % (options.out_dir, options.threads, pre_ref_gtf, options.control_bam), shell=True)
-
-        # set FPKMs
-        set_transcript_fpkms(transcripts, options.out_dir)
-
-        # set exon and preRNA FPKMs and filter for most expressed isoform
-        #set_fpkm_control(transcripts, pre_ref_gtf)
+            subprocess.call('cufflinks -o %s -p %d -G %s %s' % (options.out_dir, options.threads, update_ref_gtf, options.control_bam), shell=True)
     
     else:
         # make a new gtf file of only loci-spanning RNAs
-        span_ref_gtf = span_gtf(ref_gtf, options.out_dir)
+        update_ref_gtf = span_gtf(ref_gtf, options.out_dir)
 
         # run Cufflinks on new gtf file and CLIP BAM
         if not options.cuff_done:
-            subprocess.call('cufflinks -o %s -p %d -G %s %s' % (options.out_dir, options.threads, span_ref_gtf, clip_bam), shell=True)
+            subprocess.call('cufflinks -o %s -p %d -G %s %s' % (options.out_dir, options.threads, update_ref_gtf, clip_bam), shell=True)
 
-        # store span transcripts
-        transcripts = read_genes(span_ref_gtf, key_id='transcript_id')
+    # store transcripts
+    transcripts = read_genes(update_ref_gtf, key_id='transcript_id')
+    g2t = gff.g2t(update_ref_gtf)
 
-        # set "exon" FPKMs
-        set_fpkm_span(transcripts)
+    # set junctions
+    set_transcript_junctions(transcripts)
+
+    # set "exon" FPKMs
+    set_transcript_fpkms(transcripts, options.out_dir)
 
     # count transcriptome CLIP reads
     total_reads = int(subprocess.check_output('intersectBed -bed -u -s -abam %s -b %s/transcripts.gtf | cut -f4 | sort -u | wc -l' % (clip_bam, options.out_dir), shell=True))
@@ -130,7 +120,11 @@ def main():
 
         # output peaks
         for pstart, pend, pcount, ppval in peaks:
-            cols = [gchrom, 'clip_peaks', 'peak', str(pstart), str(pend), '.', gstrand, '.', 'id "PEAK%d"; gene_id "%s"; count "%d"; p "%.2e"' % (peak_id,gene_id,pcount,ppval)]
+            if ppval > 0:
+                peak_score = int(2000/math.pi*math.atan(-math.log(ppval,1000)))
+            else:
+                peak_score = 1000
+            cols = [gchrom, 'clip_peaks', 'peak', str(pstart), str(pend), str(peak_score), gstrand, '.', 'id "PEAK%d"; gene_id "%s"; count "%d"; p "%.2e"' % (peak_id,gene_id,pcount,ppval)]
             print >> peaks_out, '\t'.join(cols)
             peak_id += 1
 
@@ -370,13 +364,17 @@ def gene_attrs(gene_transcripts):
 ################################################################################
 # get_gene_regions
 #
-# Return a hash of gene_id's mapping to lists consisting of (chromosome, start,
-# end, strand). Coordinates are GTF format.
+# Return a 
+#
+# Input:
+#  transcripts:  Hash mapping transcript_id keys to Gene class instances.
+#
+# Output:
+#  gene_regions: Hash mapping gene_id keys to lists consisting of (chromosome,
+#                start, end, strand) tuples with coordinates in GTF format.
 ################################################################################
-def get_gene_regions(ref_gtf):
+def get_gene_regions(transcripts):
     gene_regions = {}
-
-    transcripts = read_genes(ref_gtf, key_id='transcript_id')
 
     for tid in transcripts:
         tx = transcripts[tid]
@@ -654,118 +652,6 @@ def scan_stat_approx3(k, w, T, lambd):
 
 
 ################################################################################
-# set_fpkm_control
-#
-# For each gene:
-# 1. Choose the most expressed isoform.
-# 2. Set it's exonic and preRNA FPKMs.
-# 3. Filter the unchosen isoform out of 'ref_transcripts'
-################################################################################
-def set_fpkm_control(ref_transcripts, add_gtf):
-    # collect transcript spans to map spliced isoforms to their pre-RNA
-    transcript_span = {}
-    span_unspliced = {}
-    add_transcripts = read_genes(add_gtf, key_id='transcript_id')
-    for tid in add_transcripts:
-        tx = add_transcripts[tid]
-
-        span_start = tx.exons[0].start
-        span_end = tx.exons[-1].end
-
-        transcript_span[tid] = (tx.chrom, span_start, span_end, tx.strand)
-
-        if len(tx.exons) == 1:
-            span_unspliced[transcript_span[tid]] = tid
-
-    # read FPKMS
-    transcript_fpkm = {}
-    fpkm_tracking_in = open('isoforms.fpkm_tracking')
-    line = fpkm_tracking_in.readline()
-    for line in fpkm_tracking_in:
-        a = line.split('\t')
-        a[-1] = a[-1].rstrip()
-
-        transcript_id = a[0]
-        fpkm = float(a[9])
-
-        transcript_fpkm[transcript_id] = fpkm
-    fpkm_tracking_in.close()
-
-    # choose isoform by FPKM
-    g2t = gff.g2t(add_gtf)
-    for gene_id in g2t:
-        # focus on processed transcripts
-        processed_transcripts = [tid for tid in g2t[gene_id] if not tid.startswith('UNSPLICED')]
-
-        # verify abundance estimates
-        for tid in processed_transcripts:
-            if not tid in transcript_fpkm:
-                # this can happen if two transcripts are the same in the GTF file.
-                # cufflinks will ignore one of them.
-                print >> sys.stderr, 'WARNING: Missing FPKM for spliced transcript %s' % tid
-                transcript_fpkm[tid] = 0
-
-        # choose isoform
-        max_tid = processed_transcripts[0]
-        for tid in processed_transcripts[1:]:
-            if transcript_fpkm[tid] > transcript_fpkm[max_tid]:
-                max_tid = tid
-
-        # set exonic transcript FPKM
-        ref_transcripts[max_tid].fpkm_exon = transcript_fpkm[max_tid]
-
-        # set preRNA FPKM
-        if len(ref_transcripts[max_tid].exons) == 1:
-            # irrelevant
-            ref_transcripts[max_tid].fpkm_pre = 0
-        else:
-            # find unspliced
-            unspliced_tid = span_unspliced[transcript_span[max_tid]]
-            if unspliced_tid not in transcript_fpkm:
-                # this can happen if two transcripts are the same except for differing strands
-                # cufflinks will ignore one of them.
-                print >> sys.stderr, 'WARNING: Missing FPKM for unspliced transcript %s' % unspliced_tid
-                ref_transcripts[max_tid].fpkm_pre = transcript_fpkm[max_tid] / 2.0
-            else:
-                ref_transcripts[max_tid].fpkm_pre = transcript_fpkm[unspliced_tid]
-
-    # remove unset transcripts
-    for tid in ref_transcripts.keys():
-        if ref_transcripts[tid].fpkm_exon == None:
-            del ref_transcripts[tid]
-
-
-################################################################################
-# set_fpkm_span
-#
-# Set the "exonic" FPKMs for each gene span.
-################################################################################
-def set_fpkm_span(ref_transcripts):
-    # read FPKMS
-    fpkm_tracking_in = open('isoforms.fpkm_tracking')
-    line = fpkm_tracking_in.readline()
-    for line in fpkm_tracking_in:
-        a = line.split('\t')
-        a[-1] = a[-1].rstrip()
-
-        transcript_id = a[0]
-        fpkm = float(a[9])
-
-        ref_transcripts[transcript_id].fpkm_exon = fpkm
-        ref_transcripts[transcript_id].fpkm_pre = 0
-    fpkm_tracking_in.close()
-
-    # remove unset transcripts
-    for tid in ref_transcripts.keys():
-        if ref_transcripts[tid].fpkm_exon == None:
-            # this can happen if two transcripts are the same except for differing strands
-            # cufflinks will ignore one of them.
-            print >> sys.stderr, 'WARNING: Missing FPKM for gene span %s' % tid
-
-            del ref_transcripts[tid]
-
-
-################################################################################
 # set_transcript_fpkms
 #
 # Input
@@ -831,7 +717,8 @@ def set_transcript_junctions(transcripts):
 ################################################################################
 def span_gtf(ref_gtf, out_dir):
     # obtain gene regions
-    gene_regions = get_gene_regions(ref_gtf)
+    transcripts = read_genes(ref_gtf, key_id='transcript_id')
+    gene_regions = get_gene_regions(transcripts)
 
     # print
     span_ref_gtf = '%s/span.gtf' % out_dir
@@ -839,7 +726,7 @@ def span_gtf(ref_gtf, out_dir):
 
     for gid in gene_regions:
         g = gene_regions[gid]
-        cols = [g[0], 'clip_peaks', 'exon', str(g[1]), str(g[2]), '.', g[3], '.', kv_gtf({'gene_id':gid, 'transcript_id':gid})]
+        cols = [g[0], 'clip_peaks', 'exon', str(g[1]), str(g[2]), '.', g[3], '.', gff.kv_gtf({'gene_id':gid, 'transcript_id':gid})]
         print >> span_ref_open, '\t'.join(cols)
 
     span_ref_open.close()
@@ -854,10 +741,13 @@ def span_gtf(ref_gtf, out_dir):
 # the transcriptome with window_size's subtracted.
 ################################################################################
 def transcriptome_size(transcripts, window_size):
+    gene_regions = get_gene_regions(transcripts)
+
     txome_size = 0
-    for tid in transcripts:
-        tx = transcripts[tid]
-        txome_size += tx.exons[-1].end - tx.exons[0].start - window_size + 1
+    for gene_id in gene_regions:
+        (gchrom,gstart,gend,gstrand) = gene_regions[gene_id]
+        txome_size += gend - gstart - window_size + 1
+
     return txome_size
 
 
