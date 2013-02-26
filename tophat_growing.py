@@ -41,7 +41,14 @@ def main():
         fastq_files = args[1:]
 
     # find read length
-    full_read_length = fastq_read_length(fastq_files[0])    
+    full_read_length = fastq_read_length(fastq_files[0])
+
+    # clean directories
+    if os.path.isdir('tmp_sort'):
+        shutil.rmtree('tmp_sort')
+    for read_len in range(full_read_length+1):
+        if os.path.isdir('thout%d' % read_len):
+            shutil.rmtree('thout%d' % read_len)
 
     # make a tmp dir for sorting
     os.mkdir('tmp_sort')
@@ -56,6 +63,7 @@ def main():
 
     # align fastq
     subprocess.call('tophat -o thout%d -p %d -G %s --no-novel-juncs --transcriptome-index=%s %s iter.fq' % (read_len, options.num_threads, options.gtf_file, options.tx_index, bowtie_index), shell=True)
+    #os.rename('iter.fq','thout%d/iter.fq' % read_len)
 
     ############################################
     # onward iterations
@@ -77,6 +85,7 @@ def main():
 
         # align iteration fastq
         subprocess.call('tophat -o thout%d -p %d -G %s --no-novel-juncs --transcriptome-index=%s %s iter.fq' % (read_len, options.num_threads, options.gtf_file, options.tx_index, bowtie_index), shell=True)
+        #os.rename('iter.fq','thout%d/iter.fq' % read_len)
 
         # split lost multimappers from previous iteration
         split_lost_multi(read_len-1)
