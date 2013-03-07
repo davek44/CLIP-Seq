@@ -88,6 +88,10 @@ def main():
     ############################################
     # process genes
     ############################################
+    # index if unindexed
+    if not os.path.isfile(clip_bam+'.bai'):
+        subprocess.call('samtools index %s' % clip_bam, shell=True)
+    
     # open clip-seq bam
     clip_in = pysam.Samfile(clip_bam, 'rb')
     
