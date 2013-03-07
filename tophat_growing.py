@@ -27,7 +27,10 @@ def main():
     parser.add_option('-p', '--num_threads', dest='num_threads', type='int', default=2, help='# of TopHat threads to launch [Default: %default]')
     parser.add_option('-G','--GTF', dest='gtf_file', help='Reference GTF file')
     parser.add_option('--transcriptome-index', dest='tx_index', default='txome', help='Transcriptome bowtie2 index [Default: %default]')
-    #parser.add_option('--no-novel-juncs', dest='no_novel_juncs', type='bool', action='store_true', help='Do not search for novel splice junctions [Default: %default]')
+
+    # output options
+    parser.add_option('--tmp', dest='keep_tmp', default=False, action='store_true', help='Keep temporary output files [Default: %default]')
+
     (options,args) = parser.parse_args()
 
     ############################################
@@ -63,7 +66,8 @@ def main():
 
     # align fastq
     subprocess.call('tophat -o thout%d -p %d -G %s --no-novel-juncs --transcriptome-index=%s %s iter.fq' % (read_len, options.num_threads, options.gtf_file, options.tx_index, bowtie_index), shell=True)
-    #os.rename('iter.fq','thout%d/iter.fq' % read_len)
+    if options.keep_tmp:
+        os.rename('iter.fq','thout%d/iter.fq' % read_len)
 
     ############################################
     # onward iterations
@@ -85,7 +89,8 @@ def main():
 
         # align iteration fastq
         subprocess.call('tophat -o thout%d -p %d -G %s --no-novel-juncs --transcriptome-index=%s %s iter.fq' % (read_len, options.num_threads, options.gtf_file, options.tx_index, bowtie_index), shell=True)
-        #os.rename('iter.fq','thout%d/iter.fq' % read_len)
+        if options.keep_tmp:
+            os.rename('iter.fq','thout%d/iter.fq' % read_len)
 
         # split lost multimappers from previous iteration
         split_lost_multi(read_len-1)
@@ -104,10 +109,13 @@ def main():
     subprocess.call('samtools merge all.bam %s' % ' '.join(bam_files), shell=True)
 
     # clean up
-    os.remove('iter.fq')
     os.remove('multimap.txt')
     os.remove('multimap.bf')
     os.rmdir('tmp_sort')
+    if not options.keep_tmp:
+        os.remove('iter.fq')
+        for rl in range(options.initial_seed, read_len):
+            shutil.rmtree('thout%d' % rl)
 
 
 ################################################################################
