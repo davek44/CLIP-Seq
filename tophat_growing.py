@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 from optparse import OptionParser
 import copy, gzip, os, shutil, subprocess, sys
+from bitarray import bitarray
 import pybloomfilter, pysam
 
 ################################################################################
