@@ -46,6 +46,9 @@ def main():
     # find read length
     full_read_length = fastq_read_length(fastq_files[0])
 
+    # fastq bit array
+    read_finalized = bitarray()
+
     # clean directories
     if os.path.isdir('tmp_sort'):
         shutil.rmtree('tmp_sort')
@@ -62,7 +65,7 @@ def main():
     read_len = options.initial_seed
 
     # trim reads
-    initial_fastq(fastq_files, read_len)
+    initial_fastq(fastq_files, read_len, read_finalized)
 
     # align fastq
     subprocess.call('tophat -o thout%d -p %d -G %s --no-novel-juncs --transcriptome-index=%s %s iter.fq' % (read_len, options.num_threads, options.gtf_file, options.tx_index, bowtie_index), shell=True)
@@ -85,7 +88,7 @@ def main():
         split_iter_bam_bf(read_len-1, multimap_bf)
 
         # update fastq for multimappers and grow
-        update_fastq(fastq_files, read_len, multimap_bf)
+        update_fastq(fastq_files, read_len, read_finalized, multimap_bf)
 
         # align iteration fastq
         subprocess.call('tophat -o thout%d -p %d -G %s --no-novel-juncs --transcriptome-index=%s %s iter.fq' % (read_len, options.num_threads, options.gtf_file, options.tx_index, bowtie_index), shell=True)
@@ -168,13 +171,14 @@ def fastq_read_length(fastq_file):
 # initial_fastq
 #
 # Input
-#  fastq_files: List of fastq file names
-#  read_len:    Length to trim the reads to
+#  fastq_files:    List of fastq file names.
+#  read_finalized: Bit array describing whether the read alignment is done.
+#  read_len:       Length to trim the reads to.
 #
 # Output
-#  iter.fq:     New fastq file containing trimmed reads.
+#  iter.fq:        New fastq file containing trimmed reads.
 ################################################################################
-def initial_fastq(fastq_files, read_len):
+def initial_fastq(fastq_files, read_len, read_finalized):
     out_fq = open('iter.fq', 'w')
 
     for fq_file in fastq_files:
@@ -193,6 +197,8 @@ def initial_fastq(fastq_files, read_len):
             print >> out_fq, seq[:read_len].rstrip()
             print >> out_fq, '+'
             print >> out_fq, qual[:read_len].rstrip()
+
+            read_finalized.append(False)
 
             header = fq_open.readline()
         fq_open.close()
@@ -267,18 +273,20 @@ def split_iter_bam_bf(read_len, multimap_bf):
 # update_fastq
 #
 # Input
-#  fastq_files:    List of fastq file names
-#  read_len:       Length to trim the reads to (and find prior multimaps)
-#  multimap_bf:    Bloom filter storing multimapping read headers
+#  fastq_files:    List of fastq file names.
+#  read_len:       Length to trim the reads to (and find prior multimaps).
+#  read_finalized: Bit array describing whether the read alignment is done.
+#  multimap_bf:    Bloom filter storing multimapping read headers.
 #
 # Output
-#  iter.fq:        New fastq file containing the trimmed reads we want
+#  iter.fq:        New fastq file containing the trimmed reads we want.
 ################################################################################
-def update_fastq(fastq_files, read_len, multimap_bf):
+def update_fastq(fastq_files, read_len, read_finalized, multimap_bf):
     # initialize
     out_fq = open('iter.fq', 'w')
 
     # for each fastq file
+    i = 0
     for fq_file in fastq_files:
         if fq_file[-2:] == 'gz':
             fq_open = gzip.open(fq_file)
@@ -291,11 +299,16 @@ def update_fastq(fastq_files, read_len, multimap_bf):
             mid = fq_open.readline()
             qual = fq_open.readline()
 
-            if header[1:].split()[0] in multimap_bf:
-                print >> out_fq, header.rstrip()
-                print >> out_fq, seq[:read_len].rstrip()
-                print >> out_fq, mid.rstrip()
-                print >> out_fq, qual[:read_len].rstrip()
+            if not read_finalized[i]:
+                if header[1:].split()[0] in multimap_bf:
+                    print >> out_fq, header.rstrip()
+                    print >> out_fq, seq[:read_len].rstrip()
+                    print >> out_fq, mid.rstrip()
+                    print >> out_fq, qual[:read_len].rstrip()
+                else:
+                    read_finalized[i] = True
+
+            i += 1
 
             header = fq_open.readline()
         fq_open.close()
