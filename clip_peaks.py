@@ -110,17 +110,17 @@ def main():
         # obtain basic gene attributes
         (gchrom, gstrand, gstart, gend) = gene_attrs(gene_transcripts)
 
-        # map reads to midpoints
-        read_midpoints = map_midpoints(clip_in, gchrom, gstart, gend, gstrand)
+        # choose a single event position and weight the reads
+        read_pos_weights = position_reads(clip_in, gchrom, gstart, gend, gstrand)
 
         # find splice junctions
         #junctions = map_splice_junctions(tx)
 
         # count reads and compute p-values in windows
-        window_stats = count_windows(clip_in, options.window_size, read_midpoints, gene_transcripts, gstart, gend, total_reads, txome_size)
+        window_stats = count_windows(clip_in, options.window_size, read_pos_weights, gene_transcripts, gstart, gend, total_reads, txome_size)
 
         # post-process windows to peaks
-        peaks = windows2peaks(read_midpoints, gene_transcripts, gstart, window_stats, options.window_size, options.p_val, total_reads, txome_size)
+        peaks = windows2peaks(read_pos_weights, gene_transcripts, gstart, window_stats, options.window_size, options.p_val, total_reads, txome_size)        
 
         # output peaks
         for pstart, pend, pcount, ppval in peaks:
@@ -134,6 +134,38 @@ def main():
 
     clip_in.close()
     peaks_out.close()
+
+
+################################################################################
+# cigar_endpoint
+# 
+# Input
+#  aligned_read: pysam AlignedRead object.
+#
+# Output
+#  genome_pos:   Endpoint of the alignment, considering the insertions and
+#                 deletions in its CIGAR string (which includes splicing).
+################################################################################
+def cigar_endpoint(aligned_read):
+    genome_pos = aligned_read.pos
+
+    for (operation,length) in aligned_read.cigar:
+        # match
+        if operation in [0,7,8]:
+            genome_pos += length
+
+        # insertion
+        elif operation in [1,3]:
+            genome_pos += length
+
+        # deletion
+        elif operation == 2:
+            pass
+
+        else:
+            print >> sys.stderr, 'Unknown CIGAR operation - %d, %s' % (operation, aligned_read.qname)
+
+    return genome_pos
 
 
 ################################################################################
@@ -264,7 +296,7 @@ def convolute_lambda(window_start, window_end, gene_transcripts, junctions_i, to
 # Input
 #  clip_in:          Open pysam BAM file for clip-seq alignments.
 #  window_size:      Scan statistic window size.
-#  read_midpoints:   Sorted list of read alignment midpoints.
+#  read_pos_weights: Sorted list of read alignment positions and weights.
 #  gene_transcripts: Hash mapping transcript_id to isoform Gene objects,
 #                     containing only keys for a specific gene.
 #  gene_start:       Start of the gene's span.
@@ -275,12 +307,12 @@ def convolute_lambda(window_start, window_end, gene_transcripts, junctions_i, to
 # Output
 #  window_stats:     List of tuples (alignment count, p value) for all windows.
 ################################################################################
-def count_windows(clip_in, window_size, read_midpoints, gene_transcripts, gene_start, gene_end, total_reads, txome_size):
+def count_windows(clip_in, window_size, read_pos_weights, gene_transcripts, gene_start, gene_end, total_reads, txome_size):
     # set lambda using whole region (some day, compare this to the cufflinks estimate)
-    # poisson_lambda = float(len(read_midpoints)) / (gene_end - gene_start)
+    # poisson_lambda = float(len(read_pos_weights)) / (gene_end - gene_start)
 
-    midpoints_window_start = 0 # index of the first read_midpoint that fit in the window (except I'm allowing 0)
-    midpoints_window_end = 0 # index of the first read_midpoint past the window
+    reads_window_start = 0 # index of the first read position that fits in the window (except I'm allowing 0)
+    reads_window_end = 0 # index of the first read position past the window
 
     # initialize index of the first junction ahead of the window start for each transcript
     junctions_i = {}
@@ -295,18 +327,18 @@ def count_windows(clip_in, window_size, read_midpoints, gene_transcripts, gene_s
     for window_start in range(gene_start, gene_end-window_size+1):
         window_end = window_start + window_size - 1
 
-        # update midpoints start
-        while midpoints_window_start < len(read_midpoints) and read_midpoints[midpoints_window_start] < window_start:
-            midpoints_window_start += 1
-        if midpoints_window_start >= len(read_midpoints):
+        # update read_window_start
+        while reads_window_start < len(read_pos_weights) and read_pos_weights[reads_window_start][0] < window_start:
+            reads_window_start += 1
+        if reads_window_start >= len(read_pos_weights):
             break
 
-        # update midpoints end
-        while midpoints_window_end < len(read_midpoints) and read_midpoints[midpoints_window_end] <= window_end:
-            midpoints_window_end += 1
+        # update read_window_end
+        while reads_window_end < len(read_pos_weights) and read_pos_weights[reads_window_end][0] <= window_end:
+            reads_window_end += 1
 
-        # count reads
-        window_count = midpoints_window_end - midpoints_window_start
+        # count reads TODO: Count using the weights
+        window_count = reads_window_end - reads_window_start
 
         # update junctions indexes (<= comparison because junctions holds the 1st bp of next exon/intron)
         for tid in gene_transcripts:
@@ -394,41 +426,48 @@ def get_gene_regions(transcripts):
 
 
 ################################################################################
-# map_midpoints
+# position_reads
 #
-# Map reads from a gene of interest to their alignment midpoints, filtering for
-# strand and quality.
+# Map read alignments for a gene of interest to a single genomic position,
+# filtering for strand and quality, and assign weights.
 #
 # Input
-#  clip_in:        Open pysam BAM file for clip-seq alignments.
-#  gene_chrom:     Chromosome of the gene of interest.
-#  gene_start:     Start coordinate of the gene of interest.
-#  gene_end:       End coordinate of the gene of interest.
-#  gene_strand:    Strand of the gene of interest.
+#  clip_in:          Open pysam BAM file for clip-seq alignments.
+#  gene_chrom:       Chromosome of the gene of interest.
+#  gene_start:       Start coordinate of the gene of interest.
+#  gene_end:         End coordinate of the gene of interest.
+#  gene_strand:      Strand of the gene of interest.
 #
 # Output
-#  read_midpoints: Sorted list of read alignment midpoints.
+#  read_pos_weights: Sorted list of read alignment positions and weights.
 ################################################################################
-def map_midpoints(clip_in, gene_chrom, gene_start, gene_end, gene_strand):
-    read_midpoints = []
+def position_reads(clip_in, gene_chrom, gene_start, gene_end, gene_strand):
+    read_pos_weights = []
 
     if gene_chrom in clip_in.references:
         # for each read in span
         for aligned_read in clip_in.fetch(gene_chrom, gene_start, gene_end):
-            ar_strand = '+'
-            if aligned_read.is_reverse:
-                ar_strand = '-'
+            # assign strand
+            try:
+                ar_strand = aligned_read.opt('XS')
+            except:
+                ar_strand = '+'
+                if aligned_read.is_reverse:
+                    ar_strand = '-'
 
             # check strand and quality
             if gene_strand == ar_strand and aligned_read.mapq > 0:
-
-                # map read to midpoint
-                read_midpoints.append(cigar_midpoint(aligned_read))
+                if aligned_read.paired:
+                    # map read to endpoint (closer to fragment center)
+                    read_pos_weights.append((cigar_endpoint(aligned_read), 1.0/aligned_read.opt('NH')))
+                else:
+                    # map read to midpoint
+                    read_pos_weights.append((cigar_midpoint(aligned_read), 1.0/aligned_read.opt('NH')))
 
         # in case of differing read alignment lengths
-        read_midpoints.sort()
+        read_pos_weights.sort()
 
-    return read_midpoints
+    return read_pos_weights
 
 
 ################################################################################
@@ -438,15 +477,15 @@ def map_midpoints(clip_in, gene_chrom, gene_start, gene_end, gene_strand):
 # the reads in the new intervals.
 #
 # Input
-#  trimmed_windows: List of (start,end) tuples for significant windows, trimmed
-#                    to be tight around read midpoints.
-#  read_midpoints:  Sorted list of read alignment midpoints.
+#  trimmed_windows:  List of (start,end) tuples for significant windows, trimmed
+#                     to be tight around read midpoints.
+#  read_pos_weights: Sorted list of read alignment positions and weights.
 #
 # Output
-#  peaks:           List of (start,end,count) tuples for significant trimmed
-#                    and merged windows
+#  peaks:            List of (start,end,count) tuples for significant trimmed
+#                     and merged windows
 ################################################################################
-def merge_peaks_count(trimmed_windows, read_midpoints):
+def merge_peaks_count(trimmed_windows, read_pos_weights):
     # create BED intervals
     bed_intervals = []
     for wstart, wend in trimmed_windows:
@@ -458,13 +497,15 @@ def merge_peaks_count(trimmed_windows, read_midpoints):
     bedtool_merge = bedtool.merge(stream=True)
 
     # recount peaks
+    read_positions = [pos for (pos,w) in read_pos_weights]
     peaks = []
     for bed_interval in bedtool_merge.features():
         pstart = bed_interval.start+1
         pend = bed_interval.end
 
-        reads_start_i = bisect_left(read_midpoints, pstart)
-        reads_end_i = bisect_right(read_midpoints, pend)
+        reads_start_i = bisect_left(read_positions, pstart)
+        reads_end_i = bisect_right(read_positions, pend)
+        # TODO: Count using the weights
         read_count = reads_end_i - reads_start_i
 
         peaks.append((pstart, pend, read_count))
@@ -759,19 +800,21 @@ def transcriptome_size(transcripts, window_size):
 # trim_windows
 #
 # Input
-#  windows:        List of (start,end) tuples for merged significant windows.
-#  read_midpoints: Sorted list of read alignment midpoints.
+#  windows:          List of (start,end) tuples for merged significant windows.
+#  read_pos_weights: Sorted list of read alignment positions and weights.
 #
 # Output
-#  trimmed_windows: List of (start,end) tuples for significant windows, trimmed
-#                    to be tight around read midpoints.
+#  trimmed_windows:  List of (start,end) tuples for significant windows, trimmed
+#                     to be tight around read midpoints.
 ################################################################################
-def trim_windows(windows, read_midpoints):
+def trim_windows(windows, read_pos_weights):
+    read_positions = [pos for (pos,w) in read_pos_weights]
     trimmed_windows = []
     for wstart, wend in windows:
-        trim_start_i = bisect_left(read_midpoints, wstart)
-        trim_end_i = bisect_right(read_midpoints, wend)
-        trimmed_windows.append((int(read_midpoints[trim_start_i]), int(read_midpoints[trim_end_i-1]+0.5)))
+        trim_start_i = bisect_left(read_positions, wstart)
+        trim_end_i = bisect_right(read_positions, wend)
+        # TODO: When are these ever not integers?
+        trimmed_windows.append((int(read_positions[trim_start_i]), int(read_positions[trim_end_i-1]+0.5)))
     return trimmed_windows
 
 
@@ -781,7 +824,7 @@ def trim_windows(windows, read_midpoints):
 # Convert window counts and p-values to peak calls.
 #
 # Input
-#  read_midpoints:   Sorted list of read alignment midpoints.
+#  read_pos_weights: Sorted list of read alignment positions and weights.
 #  gene_transcripts: Hash mapping transcript_id to isoform Gene objects,
 #                     containing only keys for a specific gene.
 #  gene_start:       Start of the gene's span.
@@ -794,10 +837,10 @@ def trim_windows(windows, read_midpoints):
 # Output
 #  peaks:            List of (start,end,count,p-val) tuples for peaks.
 ################################################################################
-def windows2peaks(read_midpoints, gene_transcripts, gene_start, window_stats, window_size, sig_p, total_reads, txome_size):
+def windows2peaks(read_pos_weights, gene_transcripts, gene_start, window_stats, window_size, sig_p, total_reads, txome_size):
     merged_windows = merge_windows(window_stats, window_size, sig_p, gene_start)
-    trimmed_windows = trim_windows(merged_windows, read_midpoints)
-    statless_peaks = merge_peaks_count(trimmed_windows, read_midpoints)
+    trimmed_windows = trim_windows(merged_windows, read_pos_weights)
+    statless_peaks = merge_peaks_count(trimmed_windows, read_pos_weights)
     peaks = peak_stats(statless_peaks, gene_transcripts, total_reads, txome_size)
     return peaks
 
