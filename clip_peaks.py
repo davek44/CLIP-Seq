@@ -38,6 +38,8 @@ def main():
     parser.add_option('--cuff_done', dest='cuff_done', action='store_true', default=False, help='A cufflinks run to estimate the model parameters is already done [Default: %default]')
     parser.add_option('-t', dest='threads', type='int', default=2, help='Number of threads to use [Default: %default]')
 
+    parser.add_option('-v', '--verbose', dest='verbose', action='store_true', default=False, help='Verbose output [Default: %default]')
+
     (options,args) = parser.parse_args()
 
     if len(args) != 2:
@@ -52,6 +54,9 @@ def main():
     ############################################
     # parameterize
     ############################################
+    if options.verbose:
+        print >> sys.stderr, 'Estimating gene abundances...'
+
     if options.control_bam:
         # make a new gtf w/ unspliced RNAs
         update_ref_gtf = prerna_gtf(ref_gtf, options.out_dir)
@@ -76,7 +81,10 @@ def main():
     set_transcript_junctions(transcripts)
 
     # set "exon" FPKMs
-    set_transcript_fpkms(transcripts, options.out_dir)
+    set_transcript_fpkms(transcripts, options.out_dir, options.verbose)
+
+    if options.verbose:
+        print >> sys.stderr, 'Computing global statistics...'
 
     # count transcriptome CLIP reads
     total_reads = int(subprocess.check_output('intersectBed -bed -u -s -abam %s -b %s/transcripts.gtf | cut -f4 | sort -u | wc -l' % (clip_bam, options.out_dir), shell=True))
@@ -88,10 +96,9 @@ def main():
     ############################################
     # process genes
     ############################################
-    # index if unindexed
-    if not os.path.isfile(clip_bam+'.bai'):
-        subprocess.call('samtools index %s' % clip_bam, shell=True)
-    
+    # index
+    subprocess.call('samtools index %s' % clip_bam, shell=True)
+
     # open clip-seq bam
     clip_in = pysam.Samfile(clip_bam, 'rb')
     
@@ -101,6 +108,8 @@ def main():
 
     # for each gene
     for gene_id in g2t:
+        if options.verbose:
+            print >> sys.stderr, 'Processing %s...' % gene_id
 
         # make a more focused transcript hash for this gene
         gene_transcripts = {}
@@ -110,14 +119,23 @@ def main():
         # obtain basic gene attributes
         (gchrom, gstrand, gstart, gend) = gene_attrs(gene_transcripts)
 
+        if options.verbose:
+            print >> sys.stderr, '\tFetching alignments...'
+
         # choose a single event position and weight the reads
         read_pos_weights = position_reads(clip_in, gchrom, gstart, gend, gstrand)
 
         # find splice junctions
         #junctions = map_splice_junctions(tx)
 
+        if options.verbose:
+            print >> sys.stderr, '\tCounting and computing in windows...'
+
         # count reads and compute p-values in windows
         window_stats = count_windows(clip_in, options.window_size, read_pos_weights, gene_transcripts, gstart, gend, total_reads, txome_size)
+
+        if options.verbose:
+            print >> sys.stderr, '\tRefining peaks...'
 
         # post-process windows to peaks
         peaks = windows2peaks(read_pos_weights, gene_transcripts, gstart, window_stats, options.window_size, options.p_val, total_reads, txome_size)        
@@ -706,7 +724,7 @@ def scan_stat_approx3(k, w, T, lambd):
 # Output
 #  transcripts: Same hash, FPKM attribute set.
 ################################################################################
-def set_transcript_fpkms(transcripts, out_dir):
+def set_transcript_fpkms(transcripts, out_dir, verbose):
     # read from isoforms.fpkm_tracking
     fpkm_in = open('%s/isoforms.fpkm_tracking' % out_dir)
     line = fpkm_in.readline()
@@ -721,10 +739,14 @@ def set_transcript_fpkms(transcripts, out_dir):
     fpkm_in.close()
 
     # fill in those that go missing
+    missing_fpkms = 0
     for tid in transcripts:
         if transcripts[tid].fpkm == None:
-            print >> sys.stderr, 'WARNING: Missing FPKM for %s' % tid
+            if verbose:
+                print >> sys.stderr, 'WARNING: Missing FPKM for %s' % tid
+            missing_fpkms += 1
             transcripts[tid].fpkm = 0
+    print >> sys.stderr, 'WARNING: %d genes missing FPKM, assigned 0.' % missing_fpkms
 
 
 ################################################################################
