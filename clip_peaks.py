@@ -475,7 +475,7 @@ def position_reads(clip_in, gene_chrom, gene_start, gene_end, gene_strand):
 
             # check strand and quality
             if gene_strand == ar_strand and aligned_read.mapq > 0:
-                if aligned_read.paired:
+                if aligned_read.is_paired:
                     # map read to endpoint (closer to fragment center)
                     read_pos_weights.append((cigar_endpoint(aligned_read), 1.0/aligned_read.opt('NH')))
                 else:
