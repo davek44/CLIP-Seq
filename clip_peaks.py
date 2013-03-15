@@ -146,7 +146,7 @@ def main():
                 peak_score = int(2000/math.pi*math.atan(-math.log(ppval,1000)))
             else:
                 peak_score = 1000
-            cols = [gchrom, 'clip_peaks', 'peak', str(pstart), str(pend), str(peak_score), gstrand, '.', 'id "PEAK%d"; gene_id "%s"; count "%d"; p "%.2e"' % (peak_id,gene_id,pcount,ppval)]
+            cols = [gchrom, 'clip_peaks', 'peak', str(pstart), str(pend), str(peak_score), gstrand, '.', 'id "PEAK%d"; gene_id "%s"; count "%.1f"; p "%.2e"' % (peak_id,gene_id,pcount,ppval)]
             print >> peaks_out, '\t'.join(cols)
             peak_id += 1
 
@@ -355,8 +355,12 @@ def count_windows(clip_in, window_size, read_pos_weights, gene_transcripts, gene
         while reads_window_end < len(read_pos_weights) and read_pos_weights[reads_window_end][0] <= window_end:
             reads_window_end += 1
 
-        # count reads TODO: Count using the weights
-        window_count = reads_window_end - reads_window_start
+        # count reads
+        #window_count = reads_window_end - reads_window_start
+        window_count_float = sum([read_pos_weights[i][1] for i in range(reads_window_start,reads_window_end)])
+
+        # round count
+        window_count = int(window_count_float + 0.5)
 
         # update junctions indexes (<= comparison because junctions holds the 1st bp of next exon/intron)
         for tid in gene_transcripts:
@@ -477,7 +481,10 @@ def position_reads(clip_in, gene_chrom, gene_start, gene_end, gene_strand):
             if gene_strand == ar_strand and aligned_read.mapq > 0:
                 if aligned_read.is_paired:
                     # map read to endpoint (closer to fragment center)
-                    read_pos_weights.append((cigar_endpoint(aligned_read), 1.0/aligned_read.opt('NH')))
+                    if aligned_read.is_reverse:
+                        read_pos_weights.append(aligned_read.pos, 0.5/aligned_read.opt('NH')))
+                    else:
+                        read_pos_weights.append((cigar_endpoint(aligned_read), 0.5/aligned_read.opt('NH')))
                 else:
                     # map read to midpoint
                     read_pos_weights.append((cigar_midpoint(aligned_read), 1.0/aligned_read.opt('NH')))
@@ -524,7 +531,8 @@ def merge_peaks_count(trimmed_windows, read_pos_weights):
         reads_start_i = bisect_left(read_positions, pstart)
         reads_end_i = bisect_right(read_positions, pend)
         # TODO: Count using the weights
-        read_count = reads_end_i - reads_start_i
+        #read_count = reads_end_i - reads_start_i
+        read_count = sum([read_pos_weights[i][1] for i in range(reads_start_i,reads_end_i)])
 
         peaks.append((pstart, pend, read_count))
 
@@ -602,8 +610,10 @@ def peak_stats(windows_counts, gene_transcripts, total_reads, txome_size):
             junctions_i[tid] = bisect_left(gene_transcripts[tid].junctions, wstart)
 
         peak_lambda = convolute_lambda(wstart, wend, gene_transcripts, junctions_i, total_reads)
-        p_val = scan_stat_approx3(wcount, wend-wstart+1, txome_size, peak_lambda)
-        peaks.append((wstart,wend,wcount,p_val))
+
+        w_count_round = int(w_count + 0.5)
+        p_val = scan_stat_approx3(wcount_round, wend-wstart+1, txome_size, peak_lambda)
+        peaks.append((wstart,wend,wcount_round,p_val))
     return peaks
 
 
