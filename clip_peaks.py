@@ -86,8 +86,9 @@ def main():
     if options.verbose:
         print >> sys.stderr, 'Computing global statistics...'
 
-    # count transcriptome CLIP reads
-    total_reads = int(subprocess.check_output('intersectBed -bed -u -s -abam %s -b %s/transcripts.gtf | cut -f4 | sort -u | wc -l' % (clip_bam, options.out_dir), shell=True))
+    # count transcriptome CLIP reads (overestimates small RNA single ended reads by counting antisense)
+    subprocess.call('intersectBed -abam %s -b %s/transcripts.gtf > %s/transcripts.bam' % (clip_bam, options.out_dir, options.out_dir), shell=True)
+    total_reads = count_reads('%s/transcripts.bam' % options.out_dir)
 
     # compute # of tests we will perform
     txome_size = transcriptome_size(transcripts, options.window_size)
@@ -96,6 +97,7 @@ def main():
     ############################################
     # process genes
     ############################################
+    # TODO: Can I convert to using transcripts.bam here? Does it affect performance given an indexing?
     # index
     subprocess.call('samtools index %s' % clip_bam, shell=True)
 
@@ -303,6 +305,28 @@ def convolute_lambda(window_start, window_end, gene_transcripts, junctions_i, to
 
     # convert from fpkm to lambda
     return fpkm_conv / 1000.0*(total_reads/1000000.0)
+
+
+################################################################################
+# count_reads
+#
+# Input
+#  bam_file:    BAM file with NH tags.
+#
+# Output
+#  total_reads: Total number of reads aligned with positive mapping quality,
+#                counting based on the NH tags and counting paired end reads
+#                as half.
+################################################################################
+def count_reads(bam_file):
+    total_reads = 0.0
+    for aligned_read in pysam.Samfile(bam_file, 'rb'):
+        if aligned_read.mapq > 0:
+            if aligned_read.is_paired:
+                total_reads += 0.5/aligned_read.opt('NH')
+            else:
+                total_reads += 1.0/aligned_read.opt('NH')
+    return total_reads
 
 
 ################################################################################
