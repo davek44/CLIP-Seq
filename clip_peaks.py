@@ -635,7 +635,7 @@ def peak_stats(windows_counts, gene_transcripts, total_reads, txome_size):
 
         peak_lambda = convolute_lambda(wstart, wend, gene_transcripts, junctions_i, total_reads)
 
-        w_count_round = int(w_count + 0.5)
+        wcount_round = int(wcount + 0.5)
         p_val = scan_stat_approx3(wcount_round, wend-wstart+1, txome_size, peak_lambda)
         peaks.append((wstart,wend,wcount_round,p_val))
     return peaks
