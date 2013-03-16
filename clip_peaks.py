@@ -40,6 +40,7 @@ def main():
     # debug options
     parser.add_option('-v', '--verbose', dest='verbose', action='store_true', default=False, help='Verbose output [Default: %default]')
     parser.add_option('-g', '--gene', dest='gene_only', help='Call peaks on the specified gene only')
+    parser.add_option('--print_windows', dest='print_windows', default=False, action='store_true', help='Print statistics for all windows [Default: %default]')
 
     (options,args) = parser.parse_args()
 
@@ -109,6 +110,11 @@ def main():
     peaks_out = open('%s/peaks.gff' % options.out_dir, 'w')
     peak_id = 1
 
+    # open window output
+    window_out = None
+    if options.print_windows:
+        window_out = open('%s/window_stats.txt', 'w')
+
     # for each gene
     if options.gene_only:
         gene_ids = options.gene_only
@@ -140,7 +146,7 @@ def main():
             print >> sys.stderr, '\tCounting and computing in windows...'
 
         # count reads and compute p-values in windows
-        window_stats = count_windows(clip_in, options.window_size, read_pos_weights, gene_transcripts, gstart, gend, total_reads, txome_size)
+        window_stats = count_windows(clip_in, options.window_size, read_pos_weights, gene_transcripts, gstart, gend, total_reads, txome_size, windows_out)
 
         if options.verbose:
             print >> sys.stderr, '\tRefining peaks...'
@@ -351,13 +357,19 @@ def count_reads(bam_file):
 #  gene_end:         End of the gene's span.
 #  total_reads:      Total number of reads aligned to the transcriptome.
 #  txome_size:       Total number of bp in the transcriptome.
+#  windows_out:      Open file if we should print window stats, or None.
 #
 # Output
 #  window_stats:     List of tuples (alignment count, p value) for all windows.
 ################################################################################
-def count_windows(clip_in, window_size, read_pos_weights, gene_transcripts, gene_start, gene_end, total_reads, txome_size):
+def count_windows(clip_in, window_size, read_pos_weights, gene_transcripts, gene_start, gene_end, total_reads, txome_size, windows_out):
     # set lambda using whole region (some day, compare this to the cufflinks estimate)
     # poisson_lambda = float(len(read_pos_weights)) / (gene_end - gene_start)
+
+    # get gene info
+    tid0 = gene_transcripts.keys()[0]
+    chrom = gene_transcripts[tid0].chrom
+    gene_id = gene_transcripts[tid0].kv['gene_id']
 
     reads_window_start = 0 # index of the first read position that fits in the window (except I'm allowing 0)
     reads_window_end = 0 # index of the first read position past the window
@@ -413,7 +425,9 @@ def count_windows(clip_in, window_size, read_pos_weights, gene_transcripts, gene
             window_stats.append((window_count,1))
 
         # for debugging
-        # print tx.exons[0].start+len(window_stats)-1, window_count, window_stats[-1][1], window_lambda
+        if windows_out:
+            cols = (chrom, tx.exons[0].start+len(window_stats)-1, gene_id, window_count, window_stats[-1][1], window_lambda)
+            print >> windows_out, '%-5s %9d %18s %5d %8.1e %8.2f' % cols
 
     return window_stats
 
