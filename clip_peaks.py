@@ -15,7 +15,6 @@ import gff
 # 1. All indexes are GFF-based. I.e. the first bp in a sequence is 1 and the
 #    last is len(sequence). For annotations, the start marks the first bp of
 #    the annotation and the end marks the last. The length is end-start+1.
-#    
 ################################################################################
 
 
@@ -26,19 +25,21 @@ def main():
     usage = 'usage: %prog [options] <clip_bam> <ref_gtf>'
     parser = OptionParser(usage)
 
+    # IO options
     parser.add_option('-c', dest='control_bam', help='Control BAM file')
-
-    #parser.add_option('--min_control_fpkm', dest='min_control_fpkm', type='float', default=0.25, help='Minimum FPKM to allow the transcripts covering a window to take [Default: %default]')
-
     parser.add_option('-o', dest='out_dir', default='peaks', help='Output directory [Default: %default]')
 
+    # peak calling options
     parser.add_option('-w', dest='window_size', type='int', default=50, help='Window size for scan statistic [Default: %default]')
     parser.add_option('-p', dest='p_val', type='float', default=.01, help='P-value required of window scan statistic tests [Default: %default]')
 
+    # cufflinks options
     parser.add_option('--cuff_done', dest='cuff_done', action='store_true', default=False, help='A cufflinks run to estimate the model parameters is already done [Default: %default]')
     parser.add_option('-t', dest='threads', type='int', default=2, help='Number of threads to use [Default: %default]')
 
+    # debug options
     parser.add_option('-v', '--verbose', dest='verbose', action='store_true', default=False, help='Verbose output [Default: %default]')
+    parser.add_option('-g', '--gene', dest='gene_only', help='Call peaks on the specified gene only')
 
     (options,args) = parser.parse_args()
 
@@ -109,7 +110,12 @@ def main():
     peak_id = 1
 
     # for each gene
-    for gene_id in g2t:
+    if options.gene_only:
+        gene_ids = options.gene_only
+    else:
+        gene_ids = g2t.keys()
+
+    for gene_id in gene_ids:
         if options.verbose:
             print >> sys.stderr, 'Processing %s...' % gene_id
 
