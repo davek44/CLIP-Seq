@@ -117,7 +117,7 @@ def main():
 
     # for each gene
     if options.gene_only:
-        gene_ids = options.gene_only
+        gene_ids = [options.gene_only]
     else:
         gene_ids = g2t.keys()
 
