@@ -111,9 +111,9 @@ def main():
     peak_id = 1
 
     # open window output
-    window_out = None
+    windows_out = None
     if options.print_windows:
-        window_out = open('%s/window_stats.txt' % options.out_dir, 'w')
+        windows_out = open('%s/window_stats.txt' % options.out_dir, 'w')
 
     # for each gene
     if options.gene_only:
