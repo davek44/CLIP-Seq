@@ -426,7 +426,7 @@ def count_windows(clip_in, window_size, read_pos_weights, gene_transcripts, gene
 
         # for debugging
         if windows_out:
-            cols = (chrom, tx.exons[0].start+len(window_stats)-1, gene_id, window_count, window_stats[-1][1], window_lambda)
+            cols = (chrom, window_start, gene_id, window_count, window_stats[-1][1], window_lambda)
             print >> windows_out, '%-5s %9d %18s %5d %8.1e %8.2f' % cols
 
     return window_stats
