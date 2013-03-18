@@ -817,7 +817,7 @@ def set_transcript_junctions(transcripts):
         tx = transcripts[tid]
 
         # start
-        tx.junctions.append(tx.txons[0].start)
+        tx.junctions.append(tx.exons[0].start)
 
         # splice junctions
         if len(tx.exons) > 1:
