@@ -261,8 +261,6 @@ def cigar_midpoint(aligned_read):
 #  lambda:           Poisson lambda for this window.
 ################################################################################
 def convolute_lambda(window_start, window_end, gene_transcripts, junctions_i, total_reads):
-#def convolute_lambda(window_start, window_end, fpkm_exon, fpkm_pre, total_reads, junctions, ji):
-
     # initialize FPKM
     fpkm_conv = 0
 
@@ -277,17 +275,17 @@ def convolute_lambda(window_start, window_end, gene_transcripts, junctions_i, to
 
         # after junctions
         if ji >= len(tx.junctions):
-            tcoef = 1.0
+            tcoef = 0.0
 
         # next junction out of window
         elif window_end < tx.junctions[ji]:
-            if ji % 2 == 0: # in an exon
+            if ji % 2 == 1: # in an exon
                 tcoef = 1.0
 
         # junctions
         else:
             # window start to first junction
-            if ji % 2 == 0: # exon
+            if ji % 2 == 1: # exon
                 tcoef = tx.junctions[ji] - window_start
 
             # advance
@@ -295,7 +293,7 @@ def convolute_lambda(window_start, window_end, gene_transcripts, junctions_i, to
 
             # between junctions
             while ji < len(tx.junctions) and tx.junctions[ji] <= window_end:
-                if ji % 2 == 0: # exon
+                if ji % 2 == 1: # exon
                     tcoef += tx.junctions[ji] - tx.junctions[ji-1]
                 ji += 1
 
@@ -303,7 +301,7 @@ def convolute_lambda(window_start, window_end, gene_transcripts, junctions_i, to
             ji -= 1
 
             # last junction to window end
-            if ji % 2 == 1: # exon
+            if ji % 2 == 0: # exon
                 tcoef += window_end - tx.junctions[ji] + 1
 
             # normalize
@@ -817,12 +815,20 @@ def set_transcript_fpkms(transcripts, out_dir, verbose):
 def set_transcript_junctions(transcripts):
     for tid in transcripts:
         tx = transcripts[tid]
+
+        # start
+        tx.junctions.append(tx.txons[0].start)
+
+        # splice junctions
         if len(tx.exons) > 1:
             tx.junctions.append(tx.exons[0].end+1)
             for i in range(1,len(tx.exons)-1):
                 tx.junctions.append(tx.exons[i].start)
                 tx.junctions.append(tx.exons[i].end+1)
             tx.junctions.append(tx.exons[-1].start)
+
+        # end
+        tx.junctions.append(tx.exons[-1].end+1)
 
 
 ################################################################################
@@ -966,5 +972,5 @@ class Exon:
 # __main__
 ################################################################################
 if __name__ == '__main__':
-    main()
-    #pdb.runcall(main)
+    #main()
+    pdb.runcall(main)

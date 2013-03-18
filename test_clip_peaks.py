@@ -99,10 +99,11 @@ class TestConvoluteLambda(unittest.TestCase):
     # in the given transcript.
     ############################################################
     def find_junctions(self, transcript):
-        junctions = []
+        junctions = [1]
         for i in range(1,len(transcript)):
             if transcript[i] != transcript[i-1]:
                 junctions.append(i+1)
+        junctions.append(len(transcript)+1)
         return junctions
 
 
@@ -112,6 +113,7 @@ class TestConvoluteLambda(unittest.TestCase):
         self.isoform1.labels = 'EEEEEEEE'
         self.isoform1.junctions = self.find_junctions(self.isoform1.labels)
         self.pre_isoform1.labels = 'E'*len(self.isoform1.labels)
+        self.pre_isoform1.junctions = self.find_junctions(self.pre_isoform1.labels)
 
         true_lambda = self.compute_true_lambdas()
         code_lambda = self.compute_code_lambdas()
@@ -126,6 +128,7 @@ class TestConvoluteLambda(unittest.TestCase):
         self.isoform1.labels = 'EEEEEEIIIEEIIIIIIEEE'
         self.isoform1.junctions = self.find_junctions(self.isoform1.labels)
         self.pre_isoform1.labels = 'E'*len(self.isoform1.labels)
+        self.pre_isoform1.junctions = self.find_junctions(self.pre_isoform1.labels)
 
         true_lambda = self.compute_true_lambdas()
         code_lambda = self.compute_code_lambdas()
@@ -140,6 +143,7 @@ class TestConvoluteLambda(unittest.TestCase):
         self.isoform1.labels = 'EEEIIIIIIEEIIIEEEEEE'
         self.isoform1.junctions = self.find_junctions(self.isoform1.labels)
         self.pre_isoform1.labels = 'E'*len(self.isoform1.labels)
+        self.pre_isoform1.junctions = self.find_junctions(self.pre_isoform1.labels)
 
         true_lambda = self.compute_true_lambdas()
         code_lambda = self.compute_code_lambdas()
@@ -159,9 +163,56 @@ class TestConvoluteLambda(unittest.TestCase):
         self.isoform2.junctions = self.find_junctions(self.isoform2.labels)
 
         self.pre_isoform1.labels = 'E'*len(self.isoform1.labels)
+        self.pre_isoform1.junctions = self.find_junctions(self.pre_isoform1.labels)
 
         self.gene_transcripts = {'isoform1':self.isoform1, 'isoform2':self.isoform2, 'pre_isoform1':self.pre_isoform1}
         
+        true_lambda = self.compute_true_lambdas()
+        code_lambda = self.compute_code_lambdas()
+
+        self.assertEqual(len(true_lambda),len(code_lambda))
+        for i in range(len(true_lambda)):
+            self.assertTrue(abs(true_lambda[i] - code_lambda[i]) < 1e-9)
+
+    ############################################################
+    def test4(self):
+        # multiple TSSs
+        self.isoform1.labels = 'EEEEEEEEEE'
+        self.isoform1.junctions = self.find_junctions(self.isoform1.labels)
+
+        self.isoform2 = clip_peaks.Gene('chr1', '+', {})
+        self.isoform2.fpkm = 3
+        self.isoform2.labels = 'IIEEEEEEEE'
+        self.isoform2.junctions = [3,11]
+
+        self.pre_isoform1.labels = 'E'*len(self.isoform1.labels)
+        self.pre_isoform1.junctions = self.find_junctions(self.pre_isoform1.labels)
+
+        self.gene_transcripts = {'isoform1':self.isoform1, 'isoform2':self.isoform2, 'pre_isoform1':self.pre_isoform1}
+
+        true_lambda = self.compute_true_lambdas()
+        code_lambda = self.compute_code_lambdas()
+
+        self.assertEqual(len(true_lambda),len(code_lambda))
+        for i in range(len(true_lambda)):
+            self.assertTrue(abs(true_lambda[i] - code_lambda[i]) < 1e-9)
+
+    ############################################################
+    def test5(self):
+        # multiple endpoints
+        self.isoform1.labels = 'EEEEEEEEEE'
+        self.isoform1.junctions = self.find_junctions(self.isoform1.labels)
+
+        self.isoform2 = clip_peaks.Gene('chr1', '+', {})
+        self.isoform2.fpkm = 3
+        self.isoform2.labels = 'EEEEEEEEII'
+        self.isoform2.junctions = [1,9]
+
+        self.pre_isoform1.labels = 'E'*len(self.isoform1.labels)
+        self.pre_isoform1.junctions = self.find_junctions(self.pre_isoform1.labels)
+
+        self.gene_transcripts = {'isoform1':self.isoform1, 'isoform2':self.isoform2, 'pre_isoform1':self.pre_isoform1}
+
         true_lambda = self.compute_true_lambdas()
         code_lambda = self.compute_code_lambdas()
 
@@ -178,7 +229,8 @@ class TestWindows2Peaks(unittest.TestCase):
         self.txome_size = 8
         self.total_reads = 100
         self.window_size = 4
-        self.read_midpoints = [3,3,4,5,6,6]
+        read_midpoints = [3,3,4,5,6,6]
+        self.read_pos_weights = [(read_midpoints[i],1) for i in range(len(read_midpoints))]
 
         self.tx = clip_peaks.Gene('chr1','+',{})
         self.tx.add_exon(1,10)
@@ -192,8 +244,7 @@ class TestWindows2Peaks(unittest.TestCase):
         window_stats = [(wc,.001) for wc in window_counts]
 
         true_peaks = [(3,6,6,clip_peaks.scan_stat_approx3(6, self.window_size, self.txome_size, self.poisson_lambda))]
-        #code_peaks = clip_peaks.windows2peaks(self.read_midpoints, [], window_stats, self.window_size, .05, self.tx, self.txome_size)
-        code_peaks = clip_peaks.windows2peaks(self.read_midpoints, self.gene_transcripts, 1, window_stats, self.window_size, .05, self.total_reads, self.txome_size)
+        code_peaks = clip_peaks.windows2peaks(self.read_pos_weights, self.gene_transcripts, 1, window_stats, self.window_size, .05, self.total_reads, self.txome_size)
 
         self.assertEqual(len(true_peaks),len(code_peaks))
         for i in range(len(true_peaks)):
@@ -205,3 +256,4 @@ class TestWindows2Peaks(unittest.TestCase):
 ################################################################################
 if __name__ == '__main__':
     unittest.main()
+    #pdb.runcall(unittest.main())
