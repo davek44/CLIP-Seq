@@ -519,17 +519,23 @@ def position_reads(clip_in, gene_chrom, gene_start, gene_end, gene_strand):
                 if aligned_read.is_reverse:
                     ar_strand = '-'
 
+            # count multimaps
+            try:
+                nh_tag = aligned_read.opt('NH')
+            except:
+                nh_tag = 1
+
             # check strand and quality
             if gene_strand == ar_strand and aligned_read.mapq > 0:
                 if aligned_read.is_paired:
                     # map read to endpoint (closer to fragment center)
                     if aligned_read.is_reverse:
-                        read_pos_weights.append((aligned_read.pos, 0.5/aligned_read.opt('NH')))
+                        read_pos_weights.append((aligned_read.pos, 0.5/nh_tag))
                     else:
-                        read_pos_weights.append((cigar_endpoint(aligned_read), 0.5/aligned_read.opt('NH')))
+                        read_pos_weights.append((cigar_endpoint(aligned_read), 0.5/nh_tag))
                 else:
                     # map read to midpoint
-                    read_pos_weights.append((cigar_midpoint(aligned_read), 1.0/aligned_read.opt('NH')))
+                    read_pos_weights.append((cigar_midpoint(aligned_read), 1.0/nh_tag))
 
         # in case of differing read alignment lengths
         read_pos_weights.sort()
@@ -572,7 +578,6 @@ def merge_peaks_count(trimmed_windows, read_pos_weights):
 
         reads_start_i = bisect_left(read_positions, pstart)
         reads_end_i = bisect_right(read_positions, pend)
-        # TODO: Count using the weights
         #read_count = reads_end_i - reads_start_i
         read_count = sum([read_pos_weights[i][1] for i in range(reads_start_i,reads_end_i)])
 
