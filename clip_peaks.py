@@ -559,22 +559,25 @@ def position_reads(clip_in, gene_chrom, gene_start, gene_end, gene_strand):
 #                     and merged windows
 ################################################################################
 def merge_peaks_count(trimmed_windows, read_pos_weights):
-    # create BED intervals
-    bed_intervals = []
+    # print peaks to temp file
+    win_fd, win_file = tempfile.mkstemp()
+    win_out = os.fdopen(win_fd)
     for wstart, wend in trimmed_windows:
-        bed_a = ['chrFAKE', str(wstart-1), str(wend)]
-        bed_intervals.append(pybedtools.create_interval_from_list(bed_a))
-    bedtool = pybedtools.BedTool(bed_intervals)
+        print >> win_out, '\t'.join(['chrFAKE', str(wstart-1), str(wend)])
+    win_out.close()
 
-    # merge BED intervals
-    bedtool_merge = bedtool.merge(stream=True)
+    # merge
+    merge_fd, merge_file = tempfile.mkstemp()    
+    subprocess.call('mergeBed -i %s > %s' % (win_file,merge_file), shell=True)
 
     # recount peaks
     read_positions = [pos for (pos,w) in read_pos_weights]
     peaks = []
-    for bed_interval in bedtool_merge.features():
-        pstart = bed_interval.start+1
-        pend = bed_interval.end
+    for line in os.fdopen(merge_fd):
+        pchr, pstart_str, pend_str = line.split('\t')
+
+        pstart = int(pstart_str)+1
+        pend = int(pend_str)
 
         reads_start_i = bisect_left(read_positions, pstart)
         reads_end_i = bisect_right(read_positions, pend)
@@ -582,6 +585,10 @@ def merge_peaks_count(trimmed_windows, read_pos_weights):
         read_count = sum([read_pos_weights[i][1] for i in range(reads_start_i,reads_end_i)])
 
         peaks.append((pstart, pend, read_count))
+
+    # clean up
+    os.remove(win_file)
+    os.remove(merge_file)
 
     return peaks
 
