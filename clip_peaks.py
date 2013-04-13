@@ -559,36 +559,40 @@ def position_reads(clip_in, gene_chrom, gene_start, gene_end, gene_strand):
 #                     and merged windows
 ################################################################################
 def merge_peaks_count(trimmed_windows, read_pos_weights):
-    # print peaks to temp file
-    win_fd, win_file = tempfile.mkstemp()
-    win_out = os.fdopen(win_fd)
-    for wstart, wend in trimmed_windows:
-        print >> win_out, '\t'.join(['chrFAKE', str(wstart-1), str(wend)])
-    win_out.close()
-
-    # merge
-    merge_fd, merge_file = tempfile.mkstemp()    
-    subprocess.call('mergeBed -i %s > %s' % (win_file,merge_file), shell=True)
-
-    # recount peaks
-    read_positions = [pos for (pos,w) in read_pos_weights]
     peaks = []
-    for line in os.fdopen(merge_fd):
-        pchr, pstart_str, pend_str = line.split('\t')
 
-        pstart = int(pstart_str)+1
-        pend = int(pend_str)
+    if trimmed_windows:
+        # print peaks to temp file
+        win_fd, win_file = tempfile.mkstemp()
+        win_out = open(win_file, 'w')
+        for wstart, wend in trimmed_windows:
+            print >> win_out, '\t'.join(['chrFAKE', str(wstart-1), str(wend)])
+        win_out.close()
 
-        reads_start_i = bisect_left(read_positions, pstart)
-        reads_end_i = bisect_right(read_positions, pend)
-        #read_count = reads_end_i - reads_start_i
-        read_count = sum([read_pos_weights[i][1] for i in range(reads_start_i,reads_end_i)])
+        # merge
+        merge_fd, merge_file = tempfile.mkstemp()
+        subprocess.call('mergeBed -i %s > %s' % (win_file,merge_file), shell=True)    
 
-        peaks.append((pstart, pend, read_count))
+        # recount peaks
+        read_positions = [pos for (pos,w) in read_pos_weights]    
+        for line in open(merge_file):
+            pchr, pstart_str, pend_str = line.split('\t')
 
-    # clean up
-    os.remove(win_file)
-    os.remove(merge_file)
+            pstart = int(pstart_str)+1
+            pend = int(pend_str)
+
+            reads_start_i = bisect_left(read_positions, pstart)
+            reads_end_i = bisect_right(read_positions, pend)
+            #read_count = reads_end_i - reads_start_i
+            read_count = sum([read_pos_weights[i][1] for i in range(reads_start_i,reads_end_i)])
+
+            peaks.append((pstart, pend, read_count))
+
+        # clean up
+        os.close(win_fd)
+        os.close(merge_fd)
+        os.remove(win_file)
+        os.remove(merge_file)
 
     return peaks
 
