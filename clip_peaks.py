@@ -247,6 +247,11 @@ def cigar_midpoint(aligned_read):
 #
 # Recall that junctions contains the 1st bp of the next exon/intron.
 #
+# TODO: Most of the time is spent in this function. It could be sped up by
+#       keeping better track of the contribution of each bp so that each next
+#       window can be updated by dropping the most distant bp and adding the
+#       next bp's contributions.
+#
 # Input
 #  window_start:     Window start coordinate.
 #  window_end:       Window end coordinate.
