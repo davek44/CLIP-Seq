@@ -250,7 +250,8 @@ def cigar_midpoint(aligned_read):
 # TODO: Most of the time is spent in this function. It could be sped up by
 #       keeping better track of the contribution of each bp so that each next
 #       window can be updated by dropping the most distant bp and adding the
-#       next bp's contributions.
+#       next bp's contributions. It could also be sped up by ignoring relevant
+#       isoforms, e.g. by dropping those we've past the 3' end for.
 #
 # Input
 #  window_start:     Window start coordinate.
