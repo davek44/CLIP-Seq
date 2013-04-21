@@ -529,7 +529,7 @@ def merge_overlapping_genes(update_ref_gtf, out_dir):
         a = line.split('\t')
 
         gid1 = gff.gtf_kv(a[8])['gene_id']
-        gid2 = gff.gtf_kv(a[16])['gene_id']
+        gid2 = gff.gtf_kv(a[17])['gene_id']
 
         gene_cluster = set([gid1,gid2]) | id_map.get(gid1,set()) | id_map.get(gid2,set())
         for gid in gene_cluster:
