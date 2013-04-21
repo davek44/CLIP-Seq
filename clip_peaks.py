@@ -79,6 +79,9 @@ def main():
     transcripts = read_genes(update_ref_gtf, key_id='transcript_id')
     g2t = gff.g2t(update_ref_gtf)
 
+    # merge overlapping genes
+    g2t_merge = merge_overlapping_genes(update_ref_gtf, options.out_dir)
+
     # set junctions
     set_transcript_junctions(transcripts)
 
@@ -117,9 +120,15 @@ def main():
 
     # for each gene
     if options.gene_only:
-        gene_ids = [options.gene_only]
+        gene_ids = []
+        for gids in gene_ids:
+            if options.gene_only in gids.split(','):
+                gene_ids.append(gids)
+        if len(gene_ids) == 0:
+            print >> sys.stderr, 'gene_id %s not found' % options.gene_only
+            exit(1)
     else:
-        gene_ids = g2t.keys()
+        gene_ids = g2t_merge.keys()
 
     for gene_id in gene_ids:
         if options.verbose:
@@ -127,7 +136,7 @@ def main():
 
         # make a more focused transcript hash for this gene
         gene_transcripts = {}
-        for tid in g2t[gene_id]:
+        for tid in g2t_merge[gene_id]:
             gene_transcripts[tid] = transcripts[tid]
 
         # obtain basic gene attributes
@@ -496,57 +505,50 @@ def get_gene_regions(transcripts):
 
 
 ################################################################################
-# position_reads
+# merge_overlapping_genes
 #
-# Map read alignments for a gene of interest to a single genomic position,
-# filtering for strand and quality, and assign weights.
+# Merge the given trimmed windows with counts using bedtools and then recount
+# the reads in the new intervals.
 #
 # Input
-#  clip_in:          Open pysam BAM file for clip-seq alignments.
-#  gene_chrom:       Chromosome of the gene of interest.
-#  gene_start:       Start coordinate of the gene of interest.
-#  gene_end:         End coordinate of the gene of interest.
-#  gene_strand:      Strand of the gene of interest.
+#  trimmed_windows:  List of (start,end) tuples for significant windows, trimmed
+#                     to be tight around read midpoints.
+#  read_pos_weights: Sorted list of read alignment positions and weights.
 #
 # Output
-#  read_pos_weights: Sorted list of read alignment positions and weights.
+#  peaks:            List of (start,end,count) tuples for significant trimmed
+#                     and merged windows
 ################################################################################
-def position_reads(clip_in, gene_chrom, gene_start, gene_end, gene_strand):
-    read_pos_weights = []
+def merge_overlapping_genes(update_ref_gtf, out_dir):
+    if not os.path.isfile('%s/span.gtf' % out_dir):
+        span_gtf(update_ref_gtf, out_dir)
 
-    if gene_chrom in clip_in.references:
-        # for each read in span
-        for aligned_read in clip_in.fetch(gene_chrom, gene_start, gene_end):
-            # assign strand
-            try:
-                ar_strand = aligned_read.opt('XS')
-            except:
-                ar_strand = '+'
-                if aligned_read.is_reverse:
-                    ar_strand = '-'
+    id_map = {}
+    p = subprocess.Popen('intersectBed -wo -s -a %s/span.gtf -b %s/span.gtf' % (out_dir,out_dir), shell=True, stdout=subprocess.PIPE)
+    for line in p.stdout:
+        a = line.split('\t')
 
-            # count multimaps
-            try:
-                nh_tag = aligned_read.opt('NH')
-            except:
-                nh_tag = 1
+        gid1 = gff.gtf_kv(a[8])['gene_id']
+        gid2 = gff.gtf_kv(a[16])['gene_id']
 
-            # check strand and quality
-            if gene_strand == ar_strand and aligned_read.mapq > 0:
-                if aligned_read.is_paired:
-                    # map read to endpoint (closer to fragment center)
-                    if aligned_read.is_reverse:
-                        read_pos_weights.append((aligned_read.pos, 0.5/nh_tag))
-                    else:
-                        read_pos_weights.append((cigar_endpoint(aligned_read), 0.5/nh_tag))
-                else:
-                    # map read to midpoint
-                    read_pos_weights.append((cigar_midpoint(aligned_read), 1.0/nh_tag))
+        gene_cluster = set([gid1,gid2]) | id_map.get(gid1,set()) | id_map.get(gid2,set())
+        for gid in gene_cluster:
+            id_map[gid] = gene_cluster
+    p.communicate()
 
-        # in case of differing read alignment lengths
-        read_pos_weights.sort()
+    g2t = {}
+    for line in open(update_ref_gtf):
+        a = line.split('\t')
+        kv = gff.gtf_kv(a[8])
 
-    return read_pos_weights
+        if kv['gene_id'] in id_map:
+            gene_id = ','.join(sorted(list(id_map[kv['gene_id']])))
+        else:
+            gene_id = kv['gene_id']
+
+        g2t.setdefault(gene_id,set()).add(kv['transcript_id'])
+
+    return g2t
 
 
 ################################################################################
@@ -679,6 +681,60 @@ def peak_stats(windows_counts, gene_transcripts, total_reads, txome_size):
         p_val = scan_stat_approx3(wcount_round, wend-wstart+1, txome_size, peak_lambda)
         peaks.append((wstart,wend,wcount_round,p_val))
     return peaks
+
+
+################################################################################
+# position_reads
+#
+# Map read alignments for a gene of interest to a single genomic position,
+# filtering for strand and quality, and assign weights.
+#
+# Input
+#  clip_in:          Open pysam BAM file for clip-seq alignments.
+#  gene_chrom:       Chromosome of the gene of interest.
+#  gene_start:       Start coordinate of the gene of interest.
+#  gene_end:         End coordinate of the gene of interest.
+#  gene_strand:      Strand of the gene of interest.
+#
+# Output
+#  read_pos_weights: Sorted list of read alignment positions and weights.
+################################################################################
+def position_reads(clip_in, gene_chrom, gene_start, gene_end, gene_strand):
+    read_pos_weights = []
+
+    if gene_chrom in clip_in.references:
+        # for each read in span
+        for aligned_read in clip_in.fetch(gene_chrom, gene_start, gene_end):
+            # assign strand
+            try:
+                ar_strand = aligned_read.opt('XS')
+            except:
+                ar_strand = '+'
+                if aligned_read.is_reverse:
+                    ar_strand = '-'
+
+            # count multimaps
+            try:
+                nh_tag = aligned_read.opt('NH')
+            except:
+                nh_tag = 1
+
+            # check strand and quality
+            if gene_strand == ar_strand and aligned_read.mapq > 0:
+                if aligned_read.is_paired:
+                    # map read to endpoint (closer to fragment center)
+                    if aligned_read.is_reverse:
+                        read_pos_weights.append((aligned_read.pos, 0.5/nh_tag))
+                    else:
+                        read_pos_weights.append((cigar_endpoint(aligned_read), 0.5/nh_tag))
+                else:
+                    # map read to midpoint
+                    read_pos_weights.append((cigar_midpoint(aligned_read), 1.0/nh_tag))
+
+        # in case of differing read alignment lengths
+        read_pos_weights.sort()
+
+    return read_pos_weights
 
 
 ################################################################################
