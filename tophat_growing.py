@@ -69,7 +69,7 @@ def main():
     initial_fastq(fastq_files, read_len, read_finalized)
 
     # align fastq
-    subprocess.call('tophat -o thout%d -p %d -G %s --no-novel-juncs --transcriptome-index=%s %s iter.fq' % (read_len, options.num_threads, options.gtf_file, options.tx_index, bowtie_index), shell=True)
+    subprocess.call('tophat -o thout%d -p %d -G %s -M --no-novel-juncs --transcriptome-index=%s %s iter.fq' % (read_len, options.num_threads, options.gtf_file, options.tx_index, bowtie_index), shell=True)
     if options.keep_tmp:
         os.rename('iter.fq','thout%d/iter.fq' % read_len)
 
@@ -92,7 +92,7 @@ def main():
         update_fastq(fastq_files, read_len, read_finalized, multimap_bf)
 
         # align iteration fastq
-        subprocess.call('tophat -o thout%d -p %d -G %s --no-novel-juncs --transcriptome-index=%s %s iter.fq' % (read_len, options.num_threads, options.gtf_file, options.tx_index, bowtie_index), shell=True)
+        subprocess.call('tophat -o thout%d -p %d -G %s -M --no-novel-juncs --transcriptome-index=%s %s iter.fq' % (read_len, options.num_threads, options.gtf_file, options.tx_index, bowtie_index), shell=True)
         if options.keep_tmp:
             os.rename('iter.fq','thout%d/iter.fq' % read_len)
 
