@@ -30,9 +30,10 @@ def main():
     parser.add_option('--transcriptome-index', dest='tx_index', default='txome', help='Transcriptome bowtie2 index [Default: %default]')
 
     # output options
+    parser.add_option('-o', dest='output_dir', default'.', help='Output directory [Default %default]')
     parser.add_option('--tmp', dest='keep_tmp', default=False, action='store_true', help='Keep temporary output files [Default: %default]')
 
-    (options,args) = parser.parse_args()
+    (options,args) = parser.parse_args()    
 
     ############################################
     # setup
@@ -41,8 +42,15 @@ def main():
     if len(args) < 2:
         parser.error('Missing required input.')
     else:
-        bowtie_index = args[0]
-        fastq_files = args[1:]
+        bowtie_index = os.path.abspath(args[0])
+        fastq_files = [os.path.abspath(fq) for fq in args[1:]]
+
+    # convert paths to absolute
+    options.gtf_file = os.path.abspath(options.gtf_file)
+    options.tx_index = os.path.abspath(options.tx_index)
+
+    # change to output directory
+    os.chdir(options.output_dir)
 
     # find read length
     full_read_length = fastq_read_length(fastq_files[0])
