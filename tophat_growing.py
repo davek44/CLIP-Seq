@@ -30,7 +30,7 @@ def main():
     parser.add_option('--transcriptome-index', dest='tx_index', default='txome', help='Transcriptome bowtie2 index [Default: %default]')
 
     # output options
-    parser.add_option('-o', dest='output_dir', default'.', help='Output directory [Default %default]')
+    parser.add_option('-o', dest='output_dir', default='.', help='Output directory [Default %default]')
     parser.add_option('--tmp', dest='keep_tmp', default=False, action='store_true', help='Keep temporary output files [Default: %default]')
 
     (options,args) = parser.parse_args()    
