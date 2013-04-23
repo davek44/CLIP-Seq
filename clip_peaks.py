@@ -92,6 +92,7 @@ def main():
     # count transcriptome CLIP reads (overestimates small RNA single ended reads by counting antisense)
     subprocess.call('intersectBed -abam %s -b %s/transcripts.gtf > %s/transcripts.bam' % (clip_bam, options.out_dir, options.out_dir), shell=True)
     total_reads = count_reads('%s/transcripts.bam' % options.out_dir)
+    os.remove('%s/transcripts.bam' % options.out_dir)
 
     # compute # of tests we will perform
     txome_size = transcriptome_size(transcripts, options.window_size)
@@ -100,7 +101,6 @@ def main():
     ############################################
     # process genes
     ############################################
-    # TODO: Can I convert to using transcripts.bam here? Does it affect performance given an indexing?
     # index
     subprocess.call('samtools index %s' % clip_bam, shell=True)
 
