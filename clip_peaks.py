@@ -26,7 +26,8 @@ def main():
     parser = OptionParser(usage)
 
     # IO options
-    parser.add_option('-c', dest='control_bam', help='Control BAM file')
+    parser.add_option('-a', dest='abundance_bam', help='BAM file to inform transcript abundance estimates [Default: <clip_bam>]')
+    parser.add_option('-c', dest='control_bam', help='BAM file to inform control comparisons [Default: None]')
     parser.add_option('-o', dest='out_dir', default='peaks', help='Output directory [Default: %default]')
 
     # peak calling options
@@ -59,21 +60,18 @@ def main():
     if options.verbose:
         print >> sys.stderr, 'Estimating gene abundances...'
 
-    if options.control_bam:
-        # make a new gtf w/ unspliced RNAs
-        update_ref_gtf = prerna_gtf(ref_gtf, options.out_dir)
+    if options.abundance_bam == None:
+        options.abundance_bam = clip_bam
 
-        # run Cufflinks on new gtf file and control BAM
-        if not options.cuff_done:
-            subprocess.call('cufflinks -o %s -p %d -G %s %s' % (options.out_dir, options.threads, update_ref_gtf, options.control_bam), shell=True)
-    
-    else:
-        # make a new gtf file of only loci-spanning RNAs
-        update_ref_gtf = span_gtf(ref_gtf, options.out_dir)
+    # make a new gtf w/ unspliced RNAs
+    update_ref_gtf = prerna_gtf(ref_gtf, options.out_dir)
 
-        # run Cufflinks on new gtf file and CLIP BAM
-        if not options.cuff_done:
-            subprocess.call('cufflinks -o %s -p %d -G %s %s' % (options.out_dir, options.threads, update_ref_gtf, clip_bam), shell=True)
+    # make a new gtf file of only loci-spanning RNAs (this was to replicate Yeo's old method)
+    # update_ref_gtf = span_gtf(ref_gtf, options.out_dir)
+
+    # run Cufflinks on new gtf file and abundance BAM
+    if not options.cuff_done:
+        subprocess.call('cufflinks -o %s -p %d -G %s %s' % (options.out_dir, options.threads, update_ref_gtf, options.abundance_bam), shell=True)
 
     # store transcripts
     transcripts = read_genes(update_ref_gtf, key_id='transcript_id')
@@ -109,16 +107,12 @@ def main():
     # open clip-seq bam
     clip_in = pysam.Samfile(clip_bam, 'rb')
     
-    # open peak output gff
-    peaks_out = open('%s/peaks.gff' % options.out_dir, 'w')
-    peak_id = 1
-
     # open window output
     windows_out = None
     if options.print_windows:
         windows_out = open('%s/window_stats.txt' % options.out_dir, 'w')
 
-    # for each gene
+    # possibly limit genes to examine
     if options.gene_only:
         gene_ids = []
         for gids in gene_ids:
@@ -130,6 +124,10 @@ def main():
     else:
         gene_ids = g2t_merge.keys()
 
+    # initalize peak list
+    putative_peaks = []
+
+    # for each gene
     for gene_id in gene_ids:
         if options.verbose:
             print >> sys.stderr, 'Processing %s...' % gene_id
@@ -161,19 +159,29 @@ def main():
             print >> sys.stderr, '\tRefining peaks...'
 
         # post-process windows to peaks
-        peaks = windows2peaks(read_pos_weights, gene_transcripts, gstart, window_stats, options.window_size, options.p_val, total_reads, txome_size)        
+        peaks = windows2peaks(read_pos_weights, gene_transcripts, gstart, window_stats, options.window_size, options.p_val, total_reads, txome_size)
 
-        # output peaks
-        for pstart, pend, pcount, ppval in peaks:
-            if ppval > 0:
-                peak_score = int(2000/math.pi*math.atan(-math.log(ppval,1000)))
-            else:
-                peak_score = 1000
-            cols = [gchrom, 'clip_peaks', 'peak', str(pstart), str(pend), str(peak_score), gstrand, '.', 'id "PEAK%d"; gene_id "%s"; count "%.1f"; p "%.2e"' % (peak_id,gene_id,pcount,ppval)]
-            print >> peaks_out, '\t'.join(cols)
-            peak_id += 1
+        # save peaks
+        for pstart, pend, pfrags, ppval in peaks:
+            putative_peaks.append(Peak(gchrom, pstart, pend, gstrand, gene_id, pfrags, ppval))
 
     clip_in.close()
+
+    # filter peaks using the control
+    if options.control_bam:
+        if options.verbose:
+            print >> sys.stderr, 'Filtering peaks using control BAM...'
+        final_peaks = filter_peaks_control(putative_peaks, options.control_bam, options.p_val)
+    else:
+        final_peaks = putative_peaks
+
+    # output peaks as gff
+    peaks_out = open('%s/peaks.gff' % options.out_dir, 'w')
+    peak_id = 1
+    for peak in final_peaks:
+        peak.id = peak_id
+        print >> peaks_out, peak.gff_str()
+        peak_id += 1
     peaks_out.close()
 
 
@@ -443,6 +451,55 @@ def count_windows(clip_in, window_size, read_pos_weights, gene_transcripts, gene
             print >> windows_out, '%-5s %9d %18s %5d %8.1e %8.2e' % cols
 
     return window_stats
+
+
+################################################################################
+# filter_peaks_control
+#
+# Input
+#  putative_peaks: List of Peak objects w/o attribute control_p.
+#  control_bam:    BAM file to inform control filtering.
+#  p_val:          P-value to use for filtering.
+#
+# Output
+#  filtered_peaks:          List of filtered Peak objects w/ attribute control_p set.
+################################################################################
+def filter_peaks_control(putative_peaks, control_bam, p_val):
+    # number of bp to expand each peak by to check the control
+    fuzz = 5
+
+    # open control BAM for fetching
+    control_in = pysam.Samfile(control_bam, 'rb')
+
+    # initialize p-value list for later FDR correction
+    control_p_values = []
+
+    # for each peak
+    for peak in putative_peaks:
+        # fetch reads 
+        read_pos_weights = position_reads(control_in, peak.chrom, peak.start-fuzz, peak.end+fuzz, peak.strand)
+
+        # sum weights
+        control_frags = sum([w for pos,w in read_pos_weights])
+
+        # refactor for fuzz
+        control_frags *= float(peak.end - peak.start + 1) / (peak.end - peak.start + 1 + 2*fuzz)
+
+        # perform poisson test
+        control_p_values.append( poisson.sf(peak.frags-1, control_frags) )
+
+    # correct for multiple hypotheses
+    control_q_values = fdr.ben_hoch(control_p_values)
+
+    # attach q-values to peaks and filter
+    filtered_peaks = []
+    for i in range(len(putative_peaks)):
+        peak = putative_peaks[i]
+        if control_q_values[i] <= p_val:
+            peak.control_p = control_q_values[i]
+            filtered_peaks.append(peak)
+
+    return filtered_peaks
 
 
 ################################################################################
@@ -1006,6 +1063,26 @@ def windows2peaks(read_pos_weights, gene_transcripts, gene_start, window_stats, 
 
 
 ################################################################################
+# Exon class
+################################################################################
+class Exon:
+    def __init__(self, start, end):
+        self.start = start
+        self.end = end
+
+    def __cmp__(self, x):
+        if self.start < x.start:
+            return -1
+        elif self.start > x.start:
+            return 1
+        else:
+            return 0
+
+    def __str__(self):
+        return 'exon(%d-%d)' % (self.start,self.end)
+
+
+################################################################################
 # Gene class
 ################################################################################
 class Gene:
@@ -1026,24 +1103,34 @@ class Gene:
     def __str__(self):
         return '%s %s %s %s' % (self.chrom, self.strand, kv_gtf(self.kv), ','.join([ex.__str__() for ex in self.exons]))
 
+
 ################################################################################
-# Exon class
+# Peak class
 ################################################################################
-class Exon:
-    def __init__(self, start, end):
+class Peak:
+    def __init__(self, chrom, start, end, strand, gene_id, frags, scan_p):
+        self.chrom = chrom
         self.start = start
         self.end = end
+        self.strand = strand
+        self.gene_id = gene_id
+        self.frags = frags
+        self.scan_p = scan_p
+        self.control_p = None
 
-    def __cmp__(self, x):
-        if self.start < x.start:
-            return -1
-        elif self.start > x.start:
-            return 1
+    def gff_str(self):
+        if self.control_p:
+            peak_score = int(2000/math.pi*math.atan(-math.log(self.control_p,1000)))
+        elif self.scan_p > 0:
+            peak_score = int(2000/math.pi*math.atan(-math.log(self.scan_p,1000)))
         else:
-            return 0
+            peak_score = 1000
 
-    def __str__(self):
-        return 'exon(%d-%d)' % (self.start,self.end)
+        cols = [self.chrom, 'clip_peaks', 'peak', str(self.start), str(self.end), str(peak_score), self.strand, '.', 'id "PEAK%d"; gene_id "%s"; fragments "%.1f"; scan_p "%.2e"' % (self.id,self.gene_id,self.frags,self.scan_p)]
+        if self.control_p:
+            cols[-1] += '; control_p "%.2e"' % self.control_p
+
+        return '\t'.join(cols)
 
 
 ################################################################################
