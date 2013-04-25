@@ -395,6 +395,15 @@ def count_windows(clip_in, window_size, read_pos_weights, gene_transcripts, gene
     reads_window_start = 0 # index of the first read position that fits in the window (except I'm allowing 0)
     reads_window_end = 0 # index of the first read position past the window
 
+    # combine all gene junctions
+    gene_junctions_set = set()
+    for tid in gene_transcripts:
+        gene_junctions_set |= gene_transcripts[tid].junctions
+    gene_junctions = sorted(list(gene_junctions_set))
+
+    junctions_window_start = 0 # index of the first junction that fits in the window (except I'm allowing 0)
+    junctions_window_end = 0 # index of the first junction past the window
+
     # initialize index of the first junction ahead of the window start for each transcript
     junctions_i = {}
     for tid in gene_transcripts:
@@ -425,14 +434,25 @@ def count_windows(clip_in, window_size, read_pos_weights, gene_transcripts, gene
         # round count
         window_count = int(window_count_float + 0.5)
 
-        # update junctions indexes (<= comparison because junctions holds the 1st bp of next exon/intron)
-        for tid in gene_transcripts:
-            tjunctions = gene_transcripts[tid].junctions
-            while junctions_i[tid] < len(tjunctions) and tjunctions[junctions_i[tid]] <= window_start:
-                junctions_i[tid] += 1
+        # update junctions_window_start
+        while junctions_window_start < len(gene_junctions) and gene_junctions[junctions_window_start] < window_start:
+            junctions_window_start += 1
+        
+        # update junctions_window_end
+        while junctions_window_end < len(gene_junctions) and gene_junctions[junctions_window_end] <= window_end:
+            junctions_window_end += 1
 
-        # set lambda
-        window_lambda = convolute_lambda(window_start, window_end, gene_transcripts, junctions_i, total_reads)
+        # update junction indexes and convolute lambda only if there are junctions in the window
+        if junctions_window_start < junctions_window_end:
+
+            # update junctions indexes (<= comparison because junctions holds the 1st bp of next exon/intron)
+            for tid in gene_transcripts:
+                tjunctions = gene_transcripts[tid].junctions
+                while junctions_i[tid] < len(tjunctions) and tjunctions[junctions_i[tid]] <= window_start:
+                    junctions_i[tid] += 1
+
+            # set lambda
+            window_lambda = convolute_lambda(window_start, window_end, gene_transcripts, junctions_i, total_reads)
 
         # compute p-value
         if window_count > 2:
