@@ -398,7 +398,7 @@ def count_windows(clip_in, window_size, read_pos_weights, gene_transcripts, gene
     # combine all gene junctions
     gene_junctions_set = set()
     for tid in gene_transcripts:
-        gene_junctions_set |= gene_transcripts[tid].junctions
+        gene_junctions_set |= set(gene_transcripts[tid].junctions)
     gene_junctions = sorted(list(gene_junctions_set))
 
     junctions_window_start = 0 # index of the first junction that fits in the window (except I'm allowing 0)
