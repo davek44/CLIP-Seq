@@ -4,7 +4,7 @@ from scipy.stats import poisson
 from bisect import bisect_left, bisect_right
 import copy, math, os, pdb, subprocess, sys, tempfile
 import pybedtools, pysam
-import gff
+import fdr, gff
 
 ################################################################################
 # clip_peaks.py
