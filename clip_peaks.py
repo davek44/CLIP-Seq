@@ -411,6 +411,8 @@ def count_windows(clip_in, window_size, read_pos_weights, gene_transcripts, gene
 
     # to avoid redundant computation
     precomputed_pvals = {}
+    rpw_len = len(read_pos_weights)
+    gj_len = len(gene_junctions)
 
     window_stats = []
 
@@ -418,13 +420,13 @@ def count_windows(clip_in, window_size, read_pos_weights, gene_transcripts, gene
         window_end = window_start + window_size - 1
 
         # update read_window_start
-        while reads_window_start < len(read_pos_weights) and read_pos_weights[reads_window_start][0] < window_start:
+        while reads_window_start < rpw_len and read_pos_weights[reads_window_start][0] < window_start:
             reads_window_start += 1
-        if reads_window_start >= len(read_pos_weights):
+        if reads_window_start >= rpw_len:
             break
 
         # update read_window_end
-        while reads_window_end < len(read_pos_weights) and read_pos_weights[reads_window_end][0] <= window_end:
+        while reads_window_end < rpw_len and read_pos_weights[reads_window_end][0] <= window_end:
             reads_window_end += 1
 
         # count reads
@@ -435,11 +437,11 @@ def count_windows(clip_in, window_size, read_pos_weights, gene_transcripts, gene
         window_count = int(window_count_float + 0.5)
 
         # update junctions_window_start
-        while junctions_window_start < len(gene_junctions) and gene_junctions[junctions_window_start] < window_start:
+        while junctions_window_start < gj_len and gene_junctions[junctions_window_start] < window_start:
             junctions_window_start += 1
         
         # update junctions_window_end
-        while junctions_window_end < len(gene_junctions) and gene_junctions[junctions_window_end] <= window_end:
+        while junctions_window_end < gj_len and gene_junctions[junctions_window_end] <= window_end:
             junctions_window_end += 1
 
         # update junction indexes and convolute lambda only if there are junctions in the window
