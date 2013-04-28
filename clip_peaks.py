@@ -90,9 +90,9 @@ def main():
         print >> sys.stderr, 'Computing global statistics...'
 
     # count transcriptome CLIP reads (overestimates small RNA single ended reads by counting antisense)
-    subprocess.call('intersectBed -abam %s -b %s/transcripts.gtf > %s/transcripts.bam' % (clip_bam, options.out_dir, options.out_dir), shell=True)
-    total_reads = count_reads('%s/transcripts.bam' % options.out_dir)
-    os.remove('%s/transcripts.bam' % options.out_dir)
+    subprocess.call('intersectBed -abam %s -b %s/transcripts.gtf > %s/clip.bam' % (clip_bam, options.out_dir, options.out_dir), shell=True)
+    clip_reads = count_reads('%s/clip.bam' % options.out_dir)
+    os.remove('%s/clip.bam' % options.out_dir)
 
     # compute # of tests we will perform
     txome_size = transcriptome_size(transcripts, options.window_size)
@@ -153,13 +153,13 @@ def main():
             print >> sys.stderr, '\tCounting and computing in windows...'
 
         # count reads and compute p-values in windows
-        window_stats = count_windows(clip_in, options.window_size, read_pos_weights, gene_transcripts, gstart, gend, total_reads, txome_size, windows_out)
+        window_stats = count_windows(clip_in, options.window_size, read_pos_weights, gene_transcripts, gstart, gend, clip_reads, txome_size, windows_out)
 
         if options.verbose:
             print >> sys.stderr, '\tRefining peaks...'
 
         # post-process windows to peaks
-        peaks = windows2peaks(read_pos_weights, gene_transcripts, gstart, window_stats, options.window_size, options.p_val, total_reads, txome_size)
+        peaks = windows2peaks(read_pos_weights, gene_transcripts, gstart, window_stats, options.window_size, options.p_val, clip_reads, txome_size)
 
         # save peaks
         for pstart, pend, pfrags, ppval in peaks:
@@ -171,7 +171,7 @@ def main():
     if options.control_bam:
         if options.verbose:
             print >> sys.stderr, 'Filtering peaks using control BAM...'
-        final_peaks = filter_peaks_control(putative_peaks, options.control_bam, options.p_val)
+        final_peaks = filter_peaks_control(putative_peaks, options.p_val, options.control_bam, options.out_dir, clip_reads)
     else:
         final_peaks = putative_peaks
 
@@ -353,12 +353,19 @@ def convolute_lambda(window_start, window_end, gene_transcripts, junctions_i, to
 ################################################################################
 def count_reads(bam_file):
     total_reads = 0.0
+
     for aligned_read in pysam.Samfile(bam_file, 'rb'):
         if aligned_read.mapq > 0:
+            try:
+                nh_tag = aligned_read.opt('NH')
+            except:
+                nh_tag = 1
+
             if aligned_read.is_paired:
-                total_reads += 0.5/aligned_read.opt('NH')
+                total_reads += 0.5/nh_tag
             else:
-                total_reads += 1.0/aligned_read.opt('NH')
+                total_reads += 1.0/nh_tag
+
     return total_reads
 
 
@@ -484,11 +491,16 @@ def count_windows(clip_in, window_size, read_pos_weights, gene_transcripts, gene
 #  p_val:          P-value to use for filtering.
 #
 # Output
-#  filtered_peaks:          List of filtered Peak objects w/ attribute control_p set.
+#  filtered_peaks: List of filtered Peak objects w/ attribute control_p set.
 ################################################################################
-def filter_peaks_control(putative_peaks, control_bam, p_val):
+def filter_peaks_control(putative_peaks, p_val, control_bam, out_dir, clip_reads):
     # number of bp to expand each peak by to check the control
     fuzz = 5
+
+    # count transcriptome CLIP reads (overestimates small RNA single ended reads by counting antisense)
+    subprocess.call('intersectBed -abam %s -b %s/transcripts.gtf > %s/control.bam' % (control_bam, out_dir, out_dir), shell=True)
+    control_reads = count_reads('%s/control.bam' % out_dir)
+    os.remove('%s/control.bam' % out_dir)
 
     # open control BAM for fetching
     control_in = pysam.Samfile(control_bam, 'rb')
@@ -506,6 +518,9 @@ def filter_peaks_control(putative_peaks, control_bam, p_val):
 
         # refactor for fuzz
         control_frags *= float(peak.end - peak.start + 1) / (peak.end - peak.start + 1 + 2*fuzz)
+
+        # normalize for read counts
+        control_frags *= clip_reads / control_reads
 
         # perform poisson test
         control_p_values.append( poisson.sf(peak.frags-1, control_frags) )
