@@ -171,7 +171,7 @@ def main():
     if options.control_bam:
         if options.verbose:
             print >> sys.stderr, 'Filtering peaks using control BAM...'
-        final_peaks = filter_peaks_control(putative_peaks, options.p_val, options.control_bam, options.out_dir, clip_reads)
+        final_peaks = filter_peaks_control(putative_peaks, options.p_val, options.control_bam, options.out_dir, clip_reads, options.verbose)
     else:
         final_peaks = putative_peaks
 
@@ -493,7 +493,7 @@ def count_windows(clip_in, window_size, read_pos_weights, gene_transcripts, gene
 # Output
 #  filtered_peaks: List of filtered Peak objects w/ attribute control_p set.
 ################################################################################
-def filter_peaks_control(putative_peaks, p_val, control_bam, out_dir, clip_reads):
+def filter_peaks_control(putative_peaks, p_val, control_bam, out_dir, clip_reads, verbose):
     # number of bp to expand each peak by to check the control
     fuzz = 5
 
@@ -507,6 +507,10 @@ def filter_peaks_control(putative_peaks, p_val, control_bam, out_dir, clip_reads
 
     # initialize p-value list for later FDR correction
     control_p_values = []
+
+    if verbose:
+        # open file to print filtered peaks
+        control_filter_out = open('%s/control_filter_peaks.gff', 'w')
 
     # for each peak
     for peak in putative_peaks:
@@ -535,6 +539,11 @@ def filter_peaks_control(putative_peaks, p_val, control_bam, out_dir, clip_reads
         if control_q_values[i] <= p_val:
             peak.control_p = control_q_values[i]
             filtered_peaks.append(peak)
+        elif verbose:
+            print >> control_filter_out, peaks.gff_str()
+
+    if verbose:
+        control_filter_out.close()
 
     return filtered_peaks
 
@@ -1148,6 +1157,7 @@ class Peak:
         self.end = end
         self.strand = strand
         self.gene_id = gene_id
+        self.id = ''
         self.frags = frags
         self.scan_p = scan_p
         self.control_p = None
