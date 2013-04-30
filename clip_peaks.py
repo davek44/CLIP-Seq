@@ -510,7 +510,7 @@ def filter_peaks_control(putative_peaks, p_val, control_bam, out_dir, clip_reads
 
     if verbose:
         # open file to print filtered peaks
-        control_filter_out = open('%s/control_filter_peaks.gff', 'w')
+        control_filter_out = open('%s/control_filter_peaks.gff' % out_dir, 'w')
 
     # for each peak
     for peak in putative_peaks:
