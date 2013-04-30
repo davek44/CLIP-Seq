@@ -540,7 +540,7 @@ def filter_peaks_control(putative_peaks, p_val, control_bam, out_dir, clip_reads
             peak.control_p = control_q_values[i]
             filtered_peaks.append(peak)
         elif verbose:
-            print >> control_filter_out, peaks.gff_str()
+            print >> control_filter_out, peak.gff_str()
 
     if verbose:
         control_filter_out.close()
@@ -1157,7 +1157,7 @@ class Peak:
         self.end = end
         self.strand = strand
         self.gene_id = gene_id
-        self.id = ''
+        self.id = None
         self.frags = frags
         self.scan_p = scan_p
         self.control_p = None
@@ -1170,7 +1170,10 @@ class Peak:
         else:
             peak_score = 1000
 
-        cols = [self.chrom, 'clip_peaks', 'peak', str(self.start), str(self.end), str(peak_score), self.strand, '.', 'id "PEAK%d"; gene_id "%s"; fragments "%.1f"; scan_p "%.2e"' % (self.id,self.gene_id,self.frags,self.scan_p)]
+        if self.id:
+            cols = [self.chrom, 'clip_peaks', 'peak', str(self.start), str(self.end), str(peak_score), self.strand, '.', 'id "PEAK%d"; gene_id "%s"; fragments "%.1f"; scan_p "%.2e"' % (self.id,self.gene_id,self.frags,self.scan_p)]
+        else:
+            cols = [self.chrom, 'clip_peaks', 'peak', str(self.start), str(self.end), str(peak_score), self.strand, '.', 'gene_id "%s"; fragments "%.1f"; scan_p "%.2e"' % (self.gene_id,self.frags,self.scan_p)]
         if self.control_p:
             cols[-1] += '; control_p "%.2e"' % self.control_p
 
