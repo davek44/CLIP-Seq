@@ -50,9 +50,8 @@ def main():
     options.tx_index = os.path.abspath(options.tx_index)
 
     # change to output directory
-    if os.path.isdir(options.output_dir):
-        shutil.rmtree(options.output_dir)
-    os.mkdir(options.output_dir)
+    if not os.path.isdir(options.output_dir):        
+        os.mkdir(options.output_dir)
     os.chdir(options.output_dir)
 
     # find read length
