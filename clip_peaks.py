@@ -115,7 +115,7 @@ def main():
     # possibly limit genes to examine
     if options.gene_only:
         gene_ids = []
-        for gids in gene_ids:
+        for gids in g2t_merge.keys():
             if options.gene_only in gids.split(','):
                 gene_ids.append(gids)
         if len(gene_ids) == 0:
@@ -514,20 +514,32 @@ def filter_peaks_control(putative_peaks, p_val, control_bam, out_dir, clip_reads
 
     # for each peak
     for peak in putative_peaks:
+        peak_length = peak.end - peak.start + 1
+
         # fetch reads 
         read_pos_weights = position_reads(control_in, peak.chrom, peak.start-fuzz, peak.end+fuzz, peak.strand)
 
         # sum weights
-        control_frags = sum([w for pos,w in read_pos_weights])
+        read_positions = [pos for (pos,w) in read_pos_weights] 
+        reads_start_i = bisect_left(read_positions, peak.start)
+        reads_end_i = bisect_right(read_positions, peak.end)
+        control_frags = sum([read_pos_weights[i][1] for i in range(reads_start_i,reads_end_i)])
 
-        # refactor for fuzz
-        control_frags *= float(peak.end - peak.start + 1) / (peak.end - peak.start + 1 + 2*fuzz)
+        # if there are fragments
+        if control_frags > 0:
+            # refactor for fuzz
+            control_frags *= float(peak_length) / (peak_length + 2*fuzz)
 
-        # normalize for read counts
-        control_frags *= clip_reads / control_reads
+            # normalize for read counts
+            peak.control_frags = control_frags * clip_reads / control_reads
+
+        # if there are no fragments
+        else:
+            # assume min FPKM
+            peak.control_frags = 0.1 * (clip_reads / 1000000.0) * (peak_length / 1000.0)
 
         # perform poisson test
-        control_p_values.append( poisson.sf(peak.frags-1, control_frags) )
+        control_p_values.append( poisson.sf(peak.frags-1, peak.control_frags) )
 
     # correct for multiple hypotheses
     control_q_values = fdr.ben_hoch(control_p_values)
@@ -536,8 +548,8 @@ def filter_peaks_control(putative_peaks, p_val, control_bam, out_dir, clip_reads
     filtered_peaks = []
     for i in range(len(putative_peaks)):
         peak = putative_peaks[i]
+        peak.control_p = control_q_values[i]
         if control_q_values[i] <= p_val:
-            peak.control_p = control_q_values[i]
             filtered_peaks.append(peak)
         elif verbose:
             print >> control_filter_out, peak.gff_str()
@@ -1159,12 +1171,16 @@ class Peak:
         self.gene_id = gene_id
         self.id = None
         self.frags = frags
+        self.control_frags = None
         self.scan_p = scan_p
         self.control_p = None
 
     def gff_str(self):
         if self.control_p:
-            peak_score = int(2000/math.pi*math.atan(-math.log(self.control_p,1000)))
+            if self.control_p > 0:
+                peak_score = int(2000/math.pi*math.atan(-math.log(self.control_p,1000)))
+            else:
+                peak_score = 1000
         elif self.scan_p > 0:
             peak_score = int(2000/math.pi*math.atan(-math.log(self.scan_p,1000)))
         else:
@@ -1174,6 +1190,8 @@ class Peak:
             cols = [self.chrom, 'clip_peaks', 'peak', str(self.start), str(self.end), str(peak_score), self.strand, '.', 'id "PEAK%d"; gene_id "%s"; fragments "%.1f"; scan_p "%.2e"' % (self.id,self.gene_id,self.frags,self.scan_p)]
         else:
             cols = [self.chrom, 'clip_peaks', 'peak', str(self.start), str(self.end), str(peak_score), self.strand, '.', 'gene_id "%s"; fragments "%.1f"; scan_p "%.2e"' % (self.gene_id,self.frags,self.scan_p)]
+        if self.control_frags:
+            cols[-1] += '; control_frags "%.1f"' % self.control_frags
         if self.control_p:
             cols[-1] += '; control_p "%.2e"' % self.control_p
 
