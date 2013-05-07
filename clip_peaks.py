@@ -63,11 +63,8 @@ def main():
     if options.abundance_bam == None:
         options.abundance_bam = clip_bam
 
-    # determine gene span overlaps
-    gene_overlaps = get_gene_overlaps(ref_gtf, options.out_dir)
-
     # make a new gtf w/ unspliced RNAs
-    update_ref_gtf = prerna_gtf(ref_gtf, gene_overlaps, options.out_dir)
+    update_ref_gtf = prerna_gtf(ref_gtf, options.out_dir)
 
     # make a new gtf file of only loci-spanning RNAs (this was to replicate Yeo's old method)
     # update_ref_gtf = span_gtf(ref_gtf, options.out_dir)
@@ -80,7 +77,7 @@ def main():
     transcripts = read_genes(update_ref_gtf, key_id='transcript_id')
 
     # merge overlapping genes
-    g2t_merge = merged_g2t(update_ref_gtf, gene_overlaps)
+    g2t_merge = merged_g2t(update_ref_gtf, options.out_dir)
 
     # set junctions
     set_transcript_junctions(transcripts)
@@ -594,39 +591,6 @@ def gene_attrs(gene_transcripts):
 
 
 ################################################################################
-# get_gene_overlaps
-#
-# Input:
-#  ref_gtf:       Reference GTF filename
-#  out_dir:       Directory in which to output the expanded GTF file.
-#
-# Output:
-#  gene_overlaps: Hash of gene_id's mapping to sets of gene_id's such that the
-#                  spans of the two genes overlap on the same strand.
-################################################################################
-def get_gene_overlaps(ref_gtf, out_dir):
-    if not os.path.isfile('%s/span.gtf' % out_dir):
-        span_gtf(ref_gtf, out_dir)
-
-    gene_overlaps = {}
-
-    p = subprocess.Popen('intersectBed -wo -s -a %s/span.gtf -b %s/span.gtf' % (out_dir,out_dir), shell=True, stdout=subprocess.PIPE)
-
-    for line in p.stdout:
-        a = line.split('\t')
-
-        gid1 = gff.gtf_kv(a[8])['gene_id']
-        gid2 = gff.gtf_kv(a[17])['gene_id']
-
-        if gid1 < gid2:
-            gene_overlaps.setdefault(gid1,set()).add(gid2)
-
-    p.communicate()
-
-    return gene_overlaps
-
-
-################################################################################
 # get_gene_regions
 #
 # Return a 
@@ -661,20 +625,34 @@ def get_gene_regions(transcripts):
 # mapping.
 #
 # Input
-#  ref_gtf:       GTF file
-#  gene_overlaps: Hash of gene_id's mapping to sets of gene_id's such that the
-#                  spans of the two genes overlap on the same strand.
+#  ref_gtf: GTF file
+#  out_dir: Directory in which to output the expanded GTF file.
 #
 # Output
-#  g2t:           Hash mapping gene_id's to transcript_id's
+#  g2t:     Hash mapping gene_id's to transcript_id's
 ################################################################################
-def merged_g2t(ref_gtf, gene_overlaps):
+def merged_g2t(ref_gtf, out_dir):
+    # make gene span file
+    span_gtf(ref_gtf, out_dir, level='gene_id')
+
+    # intersect spans
+    p = subprocess.Popen('intersectBed -wo -s -a %s/span.gtf -b %s/span.gtf' % (out_dir,out_dir), shell=True, stdout=subprocess.PIPE)
+
+    # map gene_id's to sets of overlapping genes
     id_map = {}
-    for gid1 in gene_overlaps:
-        for gid2 in gene_overlaps[gid1]:
-            gene_cluster = set([gid1,gid2]) | id_map.get(gid1,set()) | id_map.get(gid2,set())
-            for gid in gene_cluster:
-                id_map[gid] = gene_cluster
+    for line in p.stdout:
+        a = line.split('\t')
+
+        gid1 = gff.gtf_kv(a[8])['gene_id']
+        gid2 = gff.gtf_kv(a[17])['gene_id']
+
+        gene_cluster = set([gid1,gid2]) | id_map.get(gid1,set()) | id_map.get(gid2,set())
+        for gid in gene_cluster:
+            id_map[gid] = gene_cluster
+
+    # clean
+    p.communicate()
+    os.remove('%s/span.gtf' % out_dir)
 
     g2t = {}
     for line in open(ref_gtf):
@@ -882,37 +860,57 @@ def position_reads(clip_in, gene_chrom, gene_start, gene_end, gene_strand):
 #
 # Input
 #  ref_gtf:     Reference GTF file to expand with unspliced preRNAs.
-#  gene_overlaps: Hash of gene_id's mapping to sets of gene_id's such that the
-#                  spans of the two genes overlap on the same strand.
 #  out_dir:     Directory in which to output the expanded GTF file.
 #
 # Output
 #  prerna.gtf:  Expanded GTF file.
 #  pre_ref_gtf: The filename of the expanded GTF file.
 ################################################################################
-def prerna_gtf(ref_gtf, gene_overlaps, out_dir):
-    unspliced_index = 0
-    unspliced_hash = set()
+def prerna_gtf(ref_gtf, out_dir):
+    # make transcript span file
+    span_gtf(ref_gtf, out_dir, level='transcript_id')
 
+    # intersect spans
+    p = subprocess.Popen('intersectBed -wo -s -a %s/span.gtf -b %s/span.gtf' % (out_dir,out_dir), shell=True, stdout=subprocess.PIPE)
+
+    # count genes overlapped by each transcript
+    tx_overlaps = {}
+    for line in p.stdout:
+        a = line.split('\t')
+
+        kv1 = gff.gtf_kv(a[8])
+        tid1 = kv1['transcript_id']
+        gid1 = kv1['gene_id']
+        gid2 = gff.gtf_kv(a[17])['gene_id']
+
+        if gid1 != gid2:
+            tx_overlaps.setdefault(tid1,set()).add(gid2)
+
+    p.communicate()
+    os.remove('%s/span.gtf' % out_dir)
+
+    # read transcripts for filtering/processing
     transcripts = read_genes(ref_gtf, key_id='transcript_id')
 
     # delete transcripts from promiscuously overlapping genes
-    for tid in transcripts.keys():
-        gid = transcripts[tid].kv['gene_id']
-        if len(gene_overlaps.get(gid,[])) > 5:
+    for tid in transcripts.keys():        
+        if len(tx_overlaps.get(tid,[])) > 5:
             del transcripts[tid]
-
+    
+    # open prerna output gtf
     pre_ref_gtf = '%s/prerna.gtf' % out_dir
     pre_ref_open = open(pre_ref_gtf, 'w')
 
     # add unspliced single exon transcripts to hash
+    unspliced_hash = set()
     for tid in transcripts:
         tx = transcripts[tid]
         if len(tx.exons) == 1:
             tx_key = (tx.chrom, tx.exons[0].start, tx.exons[0].end, tx.strand)
             unspliced_hash.add(tx_key)
-        
+
     # process transcripts
+    unspliced_index = 0
     for tid in transcripts:
         tx = transcripts[tid]
         pre_start = tx.exons[0].start
@@ -1060,24 +1058,35 @@ def set_transcript_junctions(transcripts):
 # Input
 #  ref_gtf:      Reference GTF file to convert to gene spans.
 #  out_dir:      Directory in which to output the gene span GTF file.
+#  level:        gene_id or transcript_id
 #
 # Output
 #  span.gtf:     Gene span GTF file.
 #  span_ref_gtf: The filename of the gene span GTF file.
 ################################################################################
-def span_gtf(ref_gtf, out_dir):
+def span_gtf(ref_gtf, out_dir, level='gene_id'):
     # obtain gene regions
     transcripts = read_genes(ref_gtf, key_id='transcript_id')
-    gene_regions = get_gene_regions(transcripts)
 
     # print
     span_ref_gtf = '%s/span.gtf' % out_dir
     span_ref_open = open(span_ref_gtf, 'w')
 
-    for gid in gene_regions:
-        g = gene_regions[gid]
-        cols = [g[0], 'clip_peaks', 'exon', str(g[1]), str(g[2]), '.', g[3], '.', gff.kv_gtf({'gene_id':gid, 'transcript_id':gid})]
-        print >> span_ref_open, '\t'.join(cols)
+    if level == 'transcript_id':
+        for tid in transcripts:
+            tx = transcripts[tid]
+            cols = [tx.chrom, 'clip_peaks', 'exon', str(tx.exons[0].start), str(tx.exons[-1].end), '.', tx.strand, '.', gff.kv_gtf(tx.kv)]
+            print >> span_ref_open, '\t'.join(cols)
+
+    elif level == 'gene_id':
+        gene_regions = get_gene_regions(transcripts)
+        for gid in gene_regions:
+            g = gene_regions[gid]
+            cols = [g[0], 'clip_peaks', 'exon', str(g[1]), str(g[2]), '.', g[3], '.', gff.kv_gtf({'gene_id':gid, 'transcript_id':gid})]
+            print >> span_ref_open, '\t'.join(cols)
+    else:
+        print >> sys.stderr, 'Invalid level provided to span_gtf method.'
+        exit(1)
 
     span_ref_open.close()
 
