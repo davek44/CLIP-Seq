@@ -11,10 +11,17 @@ import fdr, gff
 #
 # Call peaks in CLIP-Seq data.
 #
-# Notes on conventions:
+# Conventions:
 # 1. All indexes are GFF-based. I.e. the first bp in a sequence is 1 and the
 #    last is len(sequence). For annotations, the start marks the first bp of
 #    the annotation and the end marks the last. The length is end-start+1.
+#
+# Known issues:
+# 1. Scan-statistic p-values can sometimes begin under the threshold for
+#    individual windows but emerge over it after adjacent significant windows
+#    are combined. This can happen if reads are dense, but clustered in a
+#    region smaller than the window size. The dumb Poisson model is too
+#    sensitive here.
 ################################################################################
 
 
