@@ -101,7 +101,7 @@ def main():
     os.remove('%s/clip.bam' % options.out_dir)
 
     # compute # of tests we will perform
-    txome_size = transcriptome_size(transcripts, options.window_size)
+    txome_size = transcriptome_size(transcripts, g2t_merge, options.window_size)
 
 
     ############################################
@@ -1105,13 +1105,27 @@ def span_gtf(ref_gtf, out_dir, level='gene_id'):
 #
 # Compute the number of window tests we will perform by considering the size of
 # the transcriptome with window_size's subtracted.
+#
+# Note: Before calling this, I am merging overlapping genes.
+#
+# Input
+#  transcripts: Hash mapping transcript_id to isoform Gene objects.
+#  g2t:         Hash mapping gene_id's to transcript_id's
+#  window_size: Scan statistic window size.
+#
+# Output:
+#  txome_size:  Number of window tests to be performed.
 ################################################################################
-def transcriptome_size(transcripts, window_size):
-    gene_regions = get_gene_regions(transcripts)
+def transcriptome_size(transcripts, g2t, window_size):
+    for gene_id in g2t:
+        # collect transcripts for this gene
+        gene_transcripts = {}
+        for tid in g2t[gene_id]:
+            gene_transcripts[tid] = transcripts[tid]
 
-    txome_size = 0
-    for gene_id in gene_regions:
-        (gchrom,gstart,gend,gstrand) = gene_regions[gene_id]
+        # obtain basic gene attributes
+        (gchrom, gstrand, gstart, gend) = gene_attrs(gene_transcripts)
+
         txome_size += gend - gstart - window_size + 1
 
     return txome_size
