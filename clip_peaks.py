@@ -2,7 +2,7 @@
 from optparse import OptionParser
 from scipy.stats import poisson
 from bisect import bisect_left, bisect_right
-import copy, math, os, pdb, subprocess, sys, tempfile
+import copy, math, os, pdb, random, subprocess, sys, tempfile
 import pybedtools, pysam
 import fdr, gff
 
@@ -967,6 +967,52 @@ def read_genes(gtf_file, key_id='transcript_id'):
             genes[kv[key_id]].add_exon(int(a[3]), int(a[4]))
 
     return genes
+
+
+################################################################################
+# sample_window_counts
+#
+# Sample windows from the transcriptome and count aligned reads.
+#
+# Note: Be careful with the number of samples here. Add a check so we don't
+#       resample the same counts and a check that we don't exhaust all windows.
+#
+# Input
+#  transcripts: Hash mapping transcript_id to isoform Gene objects.
+#  window_size: Window size in which to count.
+#  bams:        List of BAM file names to count aligned reads in.
+#
+# Output
+#  counts:      List of lists of window counts.
+################################################################################
+def sample_window_counts(transcripts, window_size, bams, samples=1000000):
+    # determine the genes and their spanning regions
+    gene_regions = get_gene_regions(transcripts)
+
+    # open the BAM files for fetching
+    bams_in = [pysam.Samfile(bam) for bam in bams]
+
+    # initialize counts for each BAM file
+    counts = []
+    for b in range(len(bams)):
+        counts.append([])
+
+    # sample and count
+    for s in range(samples):
+        # pick a gene
+        gene_id = random.choice(gene_regions.keys())
+        gchrom, gstart, gend, gstrand = gene_regions[gene_id]
+
+        # pick a position
+        window_start = random.randint(gene_start, gene_end-window_size+1)
+
+        # for each BAM
+        for b in range(len(bams_in)):            
+            # count reads
+            read_pos_weights = position_reads(bams_in[b], gchrom, gstart, gend, gstrand)
+            counts[b].append(sum([w for pos,w in read_pos_weights]))
+
+    return counts
 
 
 ################################################################################
