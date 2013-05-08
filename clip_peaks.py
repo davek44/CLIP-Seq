@@ -1025,8 +1025,8 @@ def set_transcript_fpkms(transcripts, out_dir, verbose):
             if verbose:
                 print >> sys.stderr, 'WARNING: Missing FPKM for %s' % tid
             missing_fpkms += 1
-            transcripts[tid].fpkm = 0
-    print >> sys.stderr, 'WARNING: %d genes missing FPKM, assigned 0.' % missing_fpkms
+            transcripts[tid].fpkm = 1000
+    print >> sys.stderr, 'WARNING: %d genes missing FPKM, assigned 1000.' % missing_fpkms
 
 
 ################################################################################
