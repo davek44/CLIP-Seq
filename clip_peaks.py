@@ -1004,7 +1004,7 @@ def sample_window_counts(transcripts, window_size, bams, samples=1000000):
         gchrom, gstart, gend, gstrand = gene_regions[gene_id]
 
         # pick a position
-        window_start = random.randint(gene_start, gene_end-window_size+1)
+        window_start = random.randint(gstart, gend-window_size+1)
 
         # for each BAM
         for b in range(len(bams_in)):            
