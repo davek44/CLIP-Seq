@@ -527,8 +527,8 @@ def filter_peaks_control(putative_peaks, p_val, control_bam, out_dir, clip_reads
 
         # sum weights
         read_positions = [pos for (pos,w) in read_pos_weights] 
-        reads_start_i = bisect_left(read_positions, peak.start)
-        reads_end_i = bisect_right(read_positions, peak.end)
+        reads_start_i = bisect_left(read_positions, peak.start-fuzz)
+        reads_end_i = bisect_right(read_positions, peak.end+fuzz)
         control_frags = sum([read_pos_weights[i][1] for i in range(reads_start_i,reads_end_i)])
 
         # if there are fragments
@@ -970,7 +970,7 @@ def read_genes(gtf_file, key_id='transcript_id'):
 
 
 ################################################################################
-# sample_window_counts
+# bams_window_counts
 #
 # Sample windows from the transcriptome and count aligned reads.
 #
@@ -985,6 +985,93 @@ def read_genes(gtf_file, key_id='transcript_id'):
 # Output
 #  counts:      List of lists of window counts.
 ################################################################################
+def bams_window_counts(transcripts, g2t, window_size, bams, p=1.0):
+    fuzz = 10
+
+    # initialize counts for each BAM file
+    counts = []
+    for b in range(len(bams)):
+        counts.append([])
+
+    # open the BAM files for fetching
+    bams_in = [pysam.Samfile(bam) for bam in bams]
+
+    # for each set of overlapping genes
+    for gid_key in g2t:
+        # get it's attributes
+        gene_transcripts = {}
+        for tid in g2t[gid_key]:
+            gene_transcripts[tid] = transcripts[tid]
+        (gchrom, gstrand, gstart, gend) = gene_attrs(gene_transcripts)
+
+        window_start = gstart + 5
+        while window_start + window_size < gend:
+            # count this window with some probability
+            if random.random() < p:
+                # for each BAM
+                for b in range(len(bams_in)):
+                    # count reads
+                    read_pos_weights = position_reads(bams_in[b], gchrom, window_start-fuzz, window_start+window_size-1+fuzz, gstrand)
+                    read_positions = [pos for (pos,w) in read_pos_weights] 
+                    reads_start_i = bisect_left(read_positions, window_start)
+                    reads_end_i = bisect_right(read_positions, window_start+window_size-1)
+                    counts[b].append(sum([read_pos_weights[i][1] for i in range(reads_start_i,reads_end_i)]))
+
+            # move window
+            window_start += window_size
+
+    return counts
+            
+'''
+def sample_window_counts(transcripts, g2t, txome_size, window_size, bams, samples=1000000):
+    # make a list of gene_id's for sampling
+    gene_ids = g2t.keys()
+
+    # open the BAM files for fetching
+    bams_in = [pysam.Samfile(bam) for bam in bams]
+
+    # initialize counts for each BAM file
+    counts = []
+    for b in range(len(bams)):
+        counts.append([])
+
+    # setup variables
+    gene_i = 0
+
+    gene_transcripts = {}
+    for tid in g2t[gene_ids[gene_i]]:
+        gene_transcripts[tid] = transcripts[tid]
+    (gchrom, gstrand, gstart, gend) = gene_attrs(gene_transcripts)
+
+    gene_txome_pos = 0
+
+    for sample_pos in sorted([random.randint(0,txome_size-1) for s in range(samples)]):
+        # if the sampled position is outside of this gene
+        while sample_pos > gene_txome_pos + (gend-gstart+1) - window_size:
+            # move to the next gene
+            gene_txome_pos += (gend-gstart+1) - (window_size-1)
+            gene_i += 1
+
+            gene_transcripts = {}
+            for tid in g2t[gene_ids[gene_i]]:
+                gene_transcripts[tid] = transcripts[tid]
+            (gchrom, gstrand, gstart, gend) = gene_attrs(gene_transcripts)
+        
+        # zip to window start
+        window_start = gstart + (sample_pos-gene_txome_pos)
+        
+        if window_start < 0:
+            x = 7
+
+        # for each BAM
+        for b in range(len(bams_in)):
+            # count reads
+            read_pos_weights = position_reads(bams_in[b], gchrom, window_start, window_start+window_size-1, gstrand)
+            counts[b].append(sum([w for pos,w in read_pos_weights]))
+
+    return counts
+'''
+'''
 def sample_window_counts(transcripts, window_size, bams, samples=1000000):
     # determine the genes and their spanning regions
     gene_regions = get_gene_regions(transcripts)
@@ -1013,7 +1100,7 @@ def sample_window_counts(transcripts, window_size, bams, samples=1000000):
             counts[b].append(sum([w for pos,w in read_pos_weights]))
 
     return counts
-
+'''
 
 ################################################################################
 # scan_stat_approx3
@@ -1163,6 +1250,8 @@ def span_gtf(ref_gtf, out_dir, level='gene_id'):
 #  txome_size:  Number of window tests to be performed.
 ################################################################################
 def transcriptome_size(transcripts, g2t, window_size):
+    txome_size = 0
+
     for gene_id in g2t:
         # collect transcripts for this gene
         gene_transcripts = {}
@@ -1172,7 +1261,7 @@ def transcriptome_size(transcripts, g2t, window_size):
         # obtain basic gene attributes
         (gchrom, gstrand, gstart, gend) = gene_attrs(gene_transcripts)
 
-        txome_size += gend - gstart - window_size + 1
+        txome_size += gend-gstart+1 - (window_size-1)
 
     return txome_size
 
