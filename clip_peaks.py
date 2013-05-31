@@ -183,7 +183,7 @@ def main():
 
         if options.verbose:
             print >> sys.stderr, 'Filtering peaks using control BAM...'
-        final_peaks = filter_peaks_control(putative_peaks, options.p_val, options.control_bam, options.out_dir, clip_reads, options.verbose)
+        final_peaks = filter_peaks_control(putative_peaks, options.p_val, overdispersion, options.control_bam, options.out_dir, clip_reads, options.verbose)
     else:
         final_peaks = putative_peaks
 
@@ -525,31 +525,35 @@ def estimate_overdispersion(clip_bam, control_bam, g2t, transcripts, window_size
         # obtain basic gene attributes
         (gchrom, gstrand, gstart, gend) = gene_attrs(gene_transcripts)
 
-        window_start = gstart
-        while window_start + window_size < gend:
-            # fetch clip reads
-            read_pos_weights = position_reads(clip_in, gchrom, window_start, window_start+window_size, gstrand)
-            
-            # sum weights
-            read_positions = [pos for (pos,w) in read_pos_weights] 
-            reads_start_i = bisect_left(read_positions, window_start)
-            reads_end_i = bisect_right(read_positions, window_start+window_size)
-            clip_frags = sum([read_pos_weights[i][1] for i in range(reads_start_i,reads_end_i)])
+        # fetch reads
+        clip_read_pos_weights = position_reads(clip_in, gchrom, gstart, gend, gstrand)
+        control_read_pos_weights = position_reads(control_in, gchrom, gstart, gend, gstrand)
 
-            # fetch clip reads
-            read_pos_weights = position_reads(control_in, gchrom, window_start, window_start+window_size, gstrand)
+        clip_read_positions = [pos for (pos,w) in clip_read_pos_weights]
+        control_read_positions = [pos for (pos,w) in control_read_pos_weights]
+
+        # initialize
+        window_start = gstart
+        clip_reads_start_i = 0
+        control_reads_start_i = 0
+
+        while window_start + window_size < gend:            
+            # count clip fragments
+            clip_reads_end_i = bisect_right(control_read_positions, window_start+window_size)
+            clip_frags = sum([clip_read_pos_weights[i][1] for i in range(clip_reads_start_i,clip_reads_end_i)])
             
-            # sum weights
-            read_positions = [pos for (pos,w) in read_pos_weights] 
-            reads_start_i = bisect_left(read_positions, window_start)
-            reads_end_i = bisect_right(read_positions, window_start+window_size)
-            control_frags = sum([read_pos_weights[i][1] for i in range(reads_start_i,reads_end_i)])
+            # count control fragments
+            control_reads_end_i = bisect_right(control_read_positions, window_start+window_size)
+            control_frags = sum([control_read_pos_weights[i][1] for i in range(control_reads_start_i,control_reads_end_i)])
 
             # save mean and variance
             window_means.append(0.5*clip_frags + 0.5*control_frags)
             window_variances.append((clip_frags - window_means[-1])**2 + (control_frags - window_means[-1])**2)
-            
+
+            # update indexes
             window_start += window_size
+            clip_reads_start_i = clip_reads_end_i
+            control_reads_start_i = control_reads_end_i
 
     clip_in.close()
     control_in.close()
@@ -562,9 +566,9 @@ def estimate_overdispersion(clip_bam, control_bam, g2t, transcripts, window_size
         mv_out = open('%s/overdispersion.txt' % out_dir, 'w')
         for i in range(len(u)):
             print >> mv_out, '%f\t%f' % (u[i],var[i])
-        mv_out.close()
+        mv_out.close()    
 
-    return sum(u*var - u**2) / sum(u**3)
+    return max(0, sum(u*var - u**2) / sum(u**3))
     
 
 ################################################################################
@@ -573,6 +577,7 @@ def estimate_overdispersion(clip_bam, control_bam, g2t, transcripts, window_size
 # Input
 #  putative_peaks: List of Peak objects w/o attribute control_p.
 #  p_val:          P-value to use for filtering.
+#  overdispersion: Negative binomial overdispersion parameter.
 #  control_bam:    BAM file to inform control filtering.
 #  out_dir:        Directory in which to output the expanded GTF file.
 #  clip_reads:     Total number of transcriptome CLIP-Seq reads.
@@ -581,7 +586,7 @@ def estimate_overdispersion(clip_bam, control_bam, g2t, transcripts, window_size
 # Output
 #  filtered_peaks: List of filtered Peak objects w/ attribute control_p set.
 ################################################################################
-def filter_peaks_control(putative_peaks, p_val, control_bam, out_dir, clip_reads, verbose):
+def filter_peaks_control(putative_peaks, p_val, overdispersion, control_bam, out_dir, clip_reads, verbose):
     # number of bp to expand each peak by to check the control
     fuzz = 5
 
@@ -627,7 +632,12 @@ def filter_peaks_control(putative_peaks, p_val, control_bam, out_dir, clip_reads
             peak.control_frags = 0.1 * (clip_reads / 1000000.0) * (peak_length / 1000.0)
 
         # perform poisson test
-        control_p_values.append( poisson.sf(peak.frags-1, peak.control_frags) )
+        #control_p_values.append( poisson.sf(peak.frags-1, peak.control_frags) )
+
+        # perform negative binomial test
+        nb_p = 1.0 / (1.0 + peak.control_frags*overdispersion)
+        nb_n = 1.0 / overdispersion
+        control_p_values.append( nbinom.sf(peak.frags-1, np_n, np_p) )
 
     # correct for multiple hypotheses
     control_q_values = fdr.ben_hoch(control_p_values)
