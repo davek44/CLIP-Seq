@@ -176,6 +176,12 @@ def main():
     # filter peaks using the control
     if options.control_bam:
         if options.verbose:
+            print >> sys.stderr, 'Estimating overdispersion...'
+        overdispersion = estimate_overdispersion(clip_bam, options.control_bam, g2t_merge, transcripts, window_size, options.out_dir, options.verbose)
+        if options.verbose:
+            print >> sys.stderr, 'Overdisperion estimated to be %f' % overdisperion
+
+        if options.verbose:
             print >> sys.stderr, 'Filtering peaks using control BAM...'
         final_peaks = filter_peaks_control(putative_peaks, options.p_val, options.control_bam, options.out_dir, clip_reads, options.verbose)
     else:
@@ -489,12 +495,88 @@ def count_windows(clip_in, window_size, read_pos_weights, gene_transcripts, gene
 
 
 ################################################################################
+# estimate_overdispersion
+#
+# Inputs:
+#  clip_bam:      CLIP sequencing BAM
+#  control_bam:   Control sequencing BAM
+#  g2t:           Hash mapping gene_id's to transcript_id's
+#  transcripts:   Hash mapping transcript_id keys to Gene class instances.
+#  window_size:   Scan statistic window size.
+#  out_dir:       Directory in which to output the expanded GTF file.
+#  verbose:       Print more verbose output.
+#
+# Outputs:
+#  overdisperion: Estimated overdispersion parameter.
+################################################################################
+def estimate_overdispersion(clip_bam, control_bam, g2t, transcripts, window_size, out_dir, verbose):
+    clip_in = pysam.Samfile(clip_bam)
+    control_in = pysam.Samfile(control_bam)
+
+    window_means = []
+    window_variances = []
+
+    for gene_id in g2t:
+        # make a more focused transcript hash for this gene
+        gene_transcripts = {}
+        for tid in g2t[gene_id]:
+            gene_transcripts[tid] = transcripts[tid]
+
+        # obtain basic gene attributes
+        (gchrom, gstrand, gstart, gend) = gene_attrs(gene_transcripts)
+
+        window_start = gstart
+        while window_start + window_size < gend:
+            # fetch clip reads
+            read_pos_weights = position_reads(clip_in, gchrom, window_start, window_start+window_size, gstrand)
+            
+            # sum weights
+            read_positions = [pos for (pos,w) in read_pos_weights] 
+            reads_start_i = bisect_left(read_positions, window_start)
+            reads_end_i = bisect_right(read_positions, window_start+window_size)
+            clip_frags = sum([read_pos_weights[i][1] for i in range(reads_start_i,reads_end_i)])
+
+            # fetch clip reads
+            read_pos_weights = position_reads(control_in, gchrom, window_start, window_start+window_size, gstrand)
+            
+            # sum weights
+            read_positions = [pos for (pos,w) in read_pos_weights] 
+            reads_start_i = bisect_left(read_positions, window_start)
+            reads_end_i = bisect_right(read_positions, window_start+window_size)
+            control_frags = sum([read_pos_weights[i][1] for i in range(reads_start_i,reads_end_i)])
+
+            # save mean and variance
+            window_means.append(0.5*clip_frags + 0.5*control_frags)
+            window_variances.append((clip_frags - window_means[-1])**2 + (control_frags - window_means[-1])**2)
+            
+            window_start += window_size
+
+    clip_in.close()
+    control_in.close()
+
+    # regress overdispersion
+    u = array(window_means)
+    var = array(window_variances)
+
+    if verbose:
+        mv_out = open('%s/overdispersion.txt' % out_dir, 'w')
+        for i in range(len(u)):
+            print >> mv_out, '%f\t%f' % (u[i],var[i])
+        mv_out.close()
+
+    return sum(u*var - u**2) / sum(u**3)
+    
+
+################################################################################
 # filter_peaks_control
 #
 # Input
 #  putative_peaks: List of Peak objects w/o attribute control_p.
-#  control_bam:    BAM file to inform control filtering.
 #  p_val:          P-value to use for filtering.
+#  control_bam:    BAM file to inform control filtering.
+#  out_dir:        Directory in which to output the expanded GTF file.
+#  clip_reads:     Total number of transcriptome CLIP-Seq reads.
+#  verbose:        Print more verbose output.
 #
 # Output
 #  filtered_peaks: List of filtered Peak objects w/ attribute control_p set.
@@ -770,7 +852,7 @@ def merge_windows(window_stats, window_size, sig_p, gene_start, allowed_sig_gap 
     if window_peak_start != None:
         merged_windows.append((gene_start+window_peak_start, gene_start+len(window_stats)-1-insig_gap+window_size-1))
 
-    return merged_windows
+    return merged_windows    
 
 
 ################################################################################
