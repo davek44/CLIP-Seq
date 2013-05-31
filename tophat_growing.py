@@ -120,7 +120,7 @@ def main():
     for rl in range(options.initial_seed, read_len-1):
         bam_files.append('thout%d/unique.bam' % rl)
         bam_files.append('thout%d/lost_multi.bam' % rl)
-    subprocess.call('samtools merge all.bam %s' % ' '.join(bam_files), shell=True)
+    subprocess.call('samtools merge accepted_hits.bam %s' % ' '.join(bam_files), shell=True)
 
     # clean up
     os.remove('multimap.txt')
