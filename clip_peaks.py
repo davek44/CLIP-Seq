@@ -529,22 +529,43 @@ def estimate_overdispersion(clip_bam, control_bam, g2t, transcripts, window_size
         clip_read_pos_weights = position_reads(clip_in, gchrom, gstart, gend, gstrand)
         control_read_pos_weights = position_reads(control_in, gchrom, gstart, gend, gstrand)
 
-        clip_read_positions = [pos for (pos,w) in clip_read_pos_weights]
-        control_read_positions = [pos for (pos,w) in control_read_pos_weights]
+        clip_rpw_len = len(clip_read_pos_weights)
+        control_rpw_len = len(control_read_pos_weights)
 
         # initialize
-        window_start = gstart
         clip_reads_start_i = 0
+        clip_reads_end_i = 0
         control_reads_start_i = 0
+        control_reads_end_i = 0
 
-        while window_start + window_size < gend:            
+        window_start = gstart
+
+        while window_start + window_size < gend:
+            # update reads_start_i
+            while clip_reads_start_i < clip_rpw_len and clip_read_pos_weights[clip_reads_start_i][0] < window_start:
+                clip_reads_start_i += 1
+
+            while control_reads_start_i < control_rpw_len and control_read_pos_weights[control_reads_start_i][0] < window_start:
+                control_reads_start_i += 1
+
+            # update reads_end_i
+            while clip_reads_end_i < clip_rpw_len and clip_read_position_weights[clip_reads_end_i][0] <= window_end:
+                clip_reads_end_i += 1
+
+            while control_reads_end_i < control_rpw_len and control_read_position_weights[control_reads_end_i][0] <= window_end:
+                control_reads_end_i += 1
+
             # count clip fragments
-            clip_reads_end_i = bisect_right(control_read_positions, window_start+window_size)
-            clip_frags = sum([clip_read_pos_weights[i][1] for i in range(clip_reads_start_i,clip_reads_end_i)])
+            if clip_reads_start_i >= clip_rpw_len:
+                clip_frags = 0.0
+            else:
+                clip_frags = sum([clip_read_pos_weights[i][1] for i in range(clip_reads_start_i,clip_reads_end_i)])
             
             # count control fragments
-            control_reads_end_i = bisect_right(control_read_positions, window_start+window_size)
-            control_frags = sum([control_read_pos_weights[i][1] for i in range(control_reads_start_i,control_reads_end_i)])
+            if control_reads_start_i >= control_rpw_len:
+                control_frags = 0.0
+            else:
+                control_frags = sum([control_read_pos_weights[i][1] for i in range(control_reads_start_i,control_reads_end_i)])
 
             # save mean and variance
             window_means.append(0.5*clip_frags + 0.5*control_frags)
