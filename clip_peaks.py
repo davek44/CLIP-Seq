@@ -177,7 +177,7 @@ def main():
     if options.control_bam:
         if options.verbose:
             print >> sys.stderr, 'Estimating overdispersion...'
-        overdispersion = estimate_overdispersion(clip_bam, options.control_bam, g2t_merge, transcripts, window_size, options.out_dir, options.verbose)
+        overdispersion = estimate_overdispersion(clip_bam, options.control_bam, g2t_merge, transcripts, options.window_size, options.out_dir, options.verbose)
         if options.verbose:
             print >> sys.stderr, 'Overdisperion estimated to be %f' % overdisperion
 
