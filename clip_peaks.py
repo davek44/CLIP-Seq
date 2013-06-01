@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 from optparse import OptionParser
 from scipy.stats import poisson
+from numpy import array
 from bisect import bisect_left, bisect_right
 import copy, math, os, pdb, random, subprocess, sys, tempfile
 import pybedtools, pysam
@@ -549,10 +550,10 @@ def estimate_overdispersion(clip_bam, control_bam, g2t, transcripts, window_size
                 control_reads_start_i += 1
 
             # update reads_end_i
-            while clip_reads_end_i < clip_rpw_len and clip_read_position_weights[clip_reads_end_i][0] <= window_end:
+            while clip_reads_end_i < clip_rpw_len and clip_read_pos_weights[clip_reads_end_i][0] <= window_end:
                 clip_reads_end_i += 1
 
-            while control_reads_end_i < control_rpw_len and control_read_position_weights[control_reads_end_i][0] <= window_end:
+            while control_reads_end_i < control_rpw_len and control_read_pos_weights[control_reads_end_i][0] <= window_end:
                 control_reads_end_i += 1
 
             # count clip fragments
