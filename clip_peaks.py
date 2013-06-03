@@ -177,7 +177,7 @@ def main():
     # filter peaks using the control
     if options.control_bam:
         # count transcriptome control reads
-        subprocess.call('intersectBed -abam %s -b %s/transcripts.gtf > %s/control.bam' % (control_bam, out_dir, out_dir), shell=True)
+        subprocess.call('intersectBed -abam %s -b %s/transcripts.gtf > %s/control.bam' % (options.control_bam, out_dir, out_dir), shell=True)
         control_reads = count_reads('%s/control.bam' % out_dir)
         os.remove('%s/control.bam' % out_dir)
 
