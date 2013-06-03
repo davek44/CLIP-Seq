@@ -176,15 +176,26 @@ def main():
 
     # filter peaks using the control
     if options.control_bam:
+        # count transcriptome control reads
+        subprocess.call('intersectBed -abam %s -b %s/transcripts.gtf > %s/control.bam' % (control_bam, out_dir, out_dir), shell=True)
+        control_reads = count_reads('%s/control.bam' % out_dir)
+        os.remove('%s/control.bam' % out_dir)
+
+        # compute normalization factor for the control
+        normalization_factor = clip_reads / control_reads
+
+        # estimate overdispersion
         if options.verbose:
             print >> sys.stderr, 'Estimating overdispersion...'
-        overdispersion = estimate_overdispersion(clip_bam, options.control_bam, g2t_merge, transcripts, options.window_size, options.out_dir, options.verbose)
+        overdispersion = estimate_overdispersion(clip_bam, options.control_bam, g2t_merge, transcripts, options.window_size, normalization_factor, options.out_dir, options.verbose)
         if options.verbose:
             print >> sys.stderr, 'Overdisperion estimated to be %f' % overdispersion
 
+        # filter peaks 
         if options.verbose:
             print >> sys.stderr, 'Filtering peaks using control BAM...'
-        final_peaks = filter_peaks_control(putative_peaks, options.p_val, overdispersion, options.control_bam, options.out_dir, clip_reads, options.verbose)
+        final_peaks = filter_peaks_control(putative_peaks, options.p_val, overdispersion, options.control_bam, normalization_factor, options.out_dir, options.verbose)
+
     else:
         final_peaks = putative_peaks
 
@@ -504,13 +515,14 @@ def count_windows(clip_in, window_size, read_pos_weights, gene_transcripts, gene
 #  g2t:           Hash mapping gene_id's to transcript_id's
 #  transcripts:   Hash mapping transcript_id keys to Gene class instances.
 #  window_size:   Scan statistic window size.
+#  norm_factor:   Ratio of total transcriptome CLIP to control reads
 #  out_dir:       Directory in which to output the expanded GTF file.
 #  verbose:       Print more verbose output.
 #
 # Outputs:
 #  overdisperion: Estimated overdispersion parameter.
 ################################################################################
-def estimate_overdispersion(clip_bam, control_bam, g2t, transcripts, window_size, out_dir, verbose):
+def estimate_overdispersion(clip_bam, control_bam, g2t, transcripts, window_size, norm_factor, out_dir, verbose):
     clip_in = pysam.Samfile(clip_bam)
     control_in = pysam.Samfile(control_bam)
 
@@ -568,6 +580,9 @@ def estimate_overdispersion(clip_bam, control_bam, g2t, transcripts, window_size
             else:
                 control_frags = sum([control_read_pos_weights[i][1] for i in range(control_reads_start_i,control_reads_end_i)])
 
+            # normalize control fragments
+            control_frags *= norm_factor
+
             # save mean and variance
             window_means.append(0.5*clip_frags + 0.5*control_frags)
             window_variances.append((clip_frags - window_means[-1])**2 + (control_frags - window_means[-1])**2)
@@ -599,21 +614,16 @@ def estimate_overdispersion(clip_bam, control_bam, g2t, transcripts, window_size
 #  p_val:          P-value to use for filtering.
 #  overdispersion: Negative binomial overdispersion parameter.
 #  control_bam:    BAM file to inform control filtering.
+#  norm_factor:    Ratio of total transcriptome CLIP to control reads
 #  out_dir:        Directory in which to output the expanded GTF file.
-#  clip_reads:     Total number of transcriptome CLIP-Seq reads.
 #  verbose:        Print more verbose output.
 #
 # Output
 #  filtered_peaks: List of filtered Peak objects w/ attribute control_p set.
 ################################################################################
-def filter_peaks_control(putative_peaks, p_val, overdispersion, control_bam, out_dir, clip_reads, verbose):
+def filter_peaks_control(putative_peaks, p_val, overdispersion, control_bam, norm_factor, out_dir, verbose):
     # number of bp to expand each peak by to check the control
     fuzz = 5
-
-    # count transcriptome CLIP reads (overestimates small RNA single ended reads by counting antisense)
-    subprocess.call('intersectBed -abam %s -b %s/transcripts.gtf > %s/control.bam' % (control_bam, out_dir, out_dir), shell=True)
-    control_reads = count_reads('%s/control.bam' % out_dir)
-    os.remove('%s/control.bam' % out_dir)
 
     # open control BAM for fetching
     control_in = pysam.Samfile(control_bam, 'rb')
@@ -644,12 +654,12 @@ def filter_peaks_control(putative_peaks, p_val, overdispersion, control_bam, out
             control_frags *= float(peak_length) / (peak_length + 2*fuzz)
 
             # normalize for read counts
-            peak.control_frags = control_frags * clip_reads / control_reads
+            peak.control_frags = control_frags * norm_factor
 
         # if there are no fragments
         else:
-            # assume min FPKM
-            peak.control_frags = 0.1 * (clip_reads / 1000000.0) * (peak_length / 1000.0)
+            # assume a small value that will pass
+            peak.control_frags = 0.1
 
         # perform poisson test
         #control_p_values.append( poisson.sf(peak.frags-1, peak.control_frags) )
