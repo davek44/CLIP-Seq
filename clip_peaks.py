@@ -623,7 +623,7 @@ def estimate_overdispersion(clip_bam, control_bam, g2t, transcripts, window_size
 ################################################################################
 def filter_peaks_control(putative_peaks, p_val, overdispersion, control_bam, norm_factor, out_dir, verbose):
     # number of bp to expand each peak by to check the control
-    fuzz = 5
+    fuzz = 3
 
     # open control BAM for fetching
     control_in = pysam.Samfile(control_bam, 'rb')
