@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 from optparse import OptionParser
-from scipy.stats import poisson
+from scipy.stats import poisson, nbinom
 from numpy import array
 from bisect import bisect_left, bisect_right
 import copy, math, os, pdb, random, subprocess, sys, tempfile
@@ -180,7 +180,7 @@ def main():
             print >> sys.stderr, 'Estimating overdispersion...'
         overdispersion = estimate_overdispersion(clip_bam, options.control_bam, g2t_merge, transcripts, options.window_size, options.out_dir, options.verbose)
         if options.verbose:
-            print >> sys.stderr, 'Overdisperion estimated to be %f' % overdisperion
+            print >> sys.stderr, 'Overdisperion estimated to be %f' % overdispersion
 
         if options.verbose:
             print >> sys.stderr, 'Filtering peaks using control BAM...'
@@ -550,10 +550,10 @@ def estimate_overdispersion(clip_bam, control_bam, g2t, transcripts, window_size
                 control_reads_start_i += 1
 
             # update reads_end_i
-            while clip_reads_end_i < clip_rpw_len and clip_read_pos_weights[clip_reads_end_i][0] <= window_end:
+            while clip_reads_end_i < clip_rpw_len and clip_read_pos_weights[clip_reads_end_i][0] <= window_start+window_size:
                 clip_reads_end_i += 1
 
-            while control_reads_end_i < control_rpw_len and control_read_pos_weights[control_reads_end_i][0] <= window_end:
+            while control_reads_end_i < control_rpw_len and control_read_pos_weights[control_reads_end_i][0] <= window_start+window_size:
                 control_reads_end_i += 1
 
             # count clip fragments
@@ -574,8 +574,6 @@ def estimate_overdispersion(clip_bam, control_bam, g2t, transcripts, window_size
 
             # update indexes
             window_start += window_size
-            clip_reads_start_i = clip_reads_end_i
-            control_reads_start_i = control_reads_end_i
 
     clip_in.close()
     control_in.close()
@@ -659,7 +657,7 @@ def filter_peaks_control(putative_peaks, p_val, overdispersion, control_bam, out
         # perform negative binomial test
         nb_p = 1.0 / (1.0 + peak.control_frags*overdispersion)
         nb_n = 1.0 / overdispersion
-        control_p_values.append( nbinom.sf(peak.frags-1, np_n, np_p) )
+        control_p_values.append( nbinom.sf(peak.frags-1, nb_n, nb_p) )
 
     # correct for multiple hypotheses
     control_q_values = fdr.ben_hoch(control_p_values)
