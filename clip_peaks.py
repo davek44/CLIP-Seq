@@ -177,9 +177,9 @@ def main():
     # filter peaks using the control
     if options.control_bam:
         # count transcriptome control reads
-        subprocess.call('intersectBed -abam %s -b %s/transcripts.gtf > %s/control.bam' % (options.control_bam, out_dir, out_dir), shell=True)
-        control_reads = count_reads('%s/control.bam' % out_dir)
-        os.remove('%s/control.bam' % out_dir)
+        subprocess.call('intersectBed -abam %s -b %s/transcripts.gtf > %s/control.bam' % (options.control_bam, options.out_dir, options.out_dir), shell=True)
+        control_reads = count_reads('%s/control.bam' % options.out_dir)
+        os.remove('%s/control.bam' % options.out_dir)
 
         # compute normalization factor for the control
         normalization_factor = clip_reads / control_reads
