@@ -4,7 +4,7 @@ from scipy.stats import poisson, nbinom
 from numpy import array
 from bisect import bisect_left, bisect_right
 import copy, math, os, pdb, random, subprocess, sys, tempfile
-import pybedtools, pysam
+import pysam
 import fdr, gff
 
 ################################################################################
@@ -90,7 +90,7 @@ def main():
     # set junctions
     set_transcript_junctions(transcripts)
 
-    # set "exon" FPKMs
+    # set transcript FPKMs
     set_transcript_fpkms(transcripts, options.out_dir, options.verbose)
 
     if options.verbose:
@@ -207,6 +207,13 @@ def main():
         print >> peaks_out, peak.gff_str()
         peak_id += 1
     peaks_out.close()
+
+    # clean cufflinks output
+    if not options.verbose:
+        os.remove(update_ref_gtf)
+        os.remove('%s/transcripts.gtf' % options.out_dir)
+        os.remove('%s/skipped.gtf' % options.out_dir)
+        os.remove('%s/genes.fpkm_tracking' % options.out_dir)
 
 
 ################################################################################
