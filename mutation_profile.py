@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 from optparse import OptionParser
-import pdb
+import pdb, string
 import pybedtools, pysam
 
 ################################################################################
@@ -46,11 +46,6 @@ def main():
         # get read sequence
         align_seq = align_a[9].upper()        
 
-        # count nt's
-        for nt in align_seq:
-            if nt != 'N':
-                acgt_content[nt] += 1
-
         # parse cigar string
         cigar_str = align_a[5]
         cigar_a = parse_cigar(cigar_str)
@@ -59,9 +54,17 @@ def main():
         deleted_ref_nts = sum([nt_count for nt_count,code in cigar_a if code in ['D','N']])
         ref_seq = fasta.fetch(reference=align.chrom, start=align.start, end=align.end+deleted_ref_nts).upper()
 
-        #strand = get_strand(int(align_a[1]))
-        #if strand == '+':
+        strand = get_strand(int(align_a[1]))
+        #if strand == '-':
         #    continue
+
+        # count nt's
+        for nt in ref_seq:
+            if nt != 'N':
+                if strand == '+':
+                    acgt_content[nt] += 1
+                else:
+                    acgt_content[rc(nt)] += 1
 
         # process cigar string
         ref_i = 0
@@ -71,7 +74,10 @@ def main():
             if code == 'M':
                 for j in range(nt_count):
                     if ref_seq[ref_i+j] != align_seq[align_i+j]:
-                        mut_key = (ref_seq[ref_i+j], align_seq[align_i+j])
+                        if strand == '+':
+                            mut_key = (ref_seq[ref_i+j], align_seq[align_i+j])
+                        else:
+                            mut_key = (rc(ref_seq[ref_i+j]), rc(align_seq[align_i+j]))
                         mutation_profile[mut_key] = mutation_profile.get(mut_key,0) + 1
                 ref_i += nt_count
                 align_i += nt_count
@@ -79,14 +85,20 @@ def main():
             # insertion
             elif code == 'I':
                 for j in range(nt_count):
-                    mut_key = ('_',align_seq[align_i+j])
+                    if strand == '+':
+                        mut_key = ('_', align_seq[align_i+j])
+                    else:
+                        mut_key = ('_', rc(align_seq[align_i+j]))
                     mutation_profile[mut_key] = mutation_profile.get(mut_key,0) + 1
                 align_i += nt_count
 
             # deletion
             elif code == 'D':
                 for j in range(nt_count):
-                    mut_key = (ref_seq[ref_i+j],'_')
+                    if strand == '+':
+                        mut_key = (ref_seq[ref_i+j], '_')
+                    else:
+                        mut_key = (rc(ref_seq[ref_i+j]), '_')
                     mutation_profile[mut_key] = mutation_profile.get(mut_key,0) + 1
                 ref_i += nt_count
 
@@ -118,6 +130,7 @@ def get_strand(flag):
     if flag & (0x10):	# minus strand if true.
         strand = "-"		
     return strand
+
 
 ################################################################################
 # normalize_profile
@@ -161,6 +174,7 @@ def parse_cigar(cigar_str):
             nt_count = 0
     return cigar_a
 
+
 ################################################################################
 # print_table
 ################################################################################
@@ -176,7 +190,16 @@ def print_table(mutation_profile):
         col_sums.append(sum([mutation_profile.get((nt1,nt2),0) for nt1 in nts]))
     print '  %7d %7d %7d %7d %7d' % tuple(col_sums)
     print ''
-        
+
+
+################################################################################
+# rc
+#
+# Reverse complement sequence
+################################################################################
+def rc(seq):
+    return seq.translate(string.maketrans("ATCGatcg","TAGCtagc"))[::-1]
+
 
 ################################################################################
 # __main__
