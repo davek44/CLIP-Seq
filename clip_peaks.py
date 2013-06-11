@@ -97,7 +97,7 @@ def main():
         print >> sys.stderr, 'Computing global statistics...'
 
     # count transcriptome CLIP reads (overestimates small RNA single ended reads by counting antisense)
-    subprocess.call('intersectBed -abam %s -b %s/transcripts.gtf > %s/clip.bam' % (clip_bam, options.out_dir, options.out_dir), shell=True)
+    subprocess.call('intersectBed -abam %s -b %s > %s/clip.bam' % (clip_bam, update_ref_gtf, options.out_dir), shell=True)
     clip_reads = count_reads('%s/clip.bam' % options.out_dir)
     os.remove('%s/clip.bam' % options.out_dir)
 
@@ -177,7 +177,7 @@ def main():
     # filter peaks using the control
     if options.control_bam:
         # count transcriptome control reads
-        subprocess.call('intersectBed -abam %s -b %s/transcripts.gtf > %s/control.bam' % (options.control_bam, options.out_dir, options.out_dir), shell=True)
+        subprocess.call('intersectBed -abam %s -b %s > %s/control.bam' % (options.control_bam, update_ref_gtf, options.out_dir), shell=True)
         control_reads = count_reads('%s/control.bam' % options.out_dir)
         os.remove('%s/control.bam' % options.out_dir)
 
