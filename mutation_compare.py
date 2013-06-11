@@ -93,9 +93,9 @@ def main():
 def compute_relative_profile(mut_prof1, norm1, mut_prof2, norm2):
     rel_mut_prof = {}
     for mut_key in mut_prof1.keys():
-        if mut_prof1[mut_key] == 0 and mut_prof2[mut_key] == 0:
+        if mut_prof1[mut_key] == 0 or mut_prof2[mut_key] == 0:
             rel_mut_prof[mut_key] = 0
-        else:  
+        else:
             rel_mut_prof[mut_key] = math.log((mut_prof1[mut_key]/float(norm1)) / (mut_prof2[mut_key]/float(norm2))) / math.log(2)
     return rel_mut_prof
 
