@@ -71,21 +71,21 @@ def main():
     if options.abundance_bam == None:
         options.abundance_bam = clip_bam
 
-    # make a new gtf w/ unspliced RNAs
-    update_ref_gtf = prerna_gtf(ref_gtf, options.out_dir)
-
-    # make a new gtf file of only loci-spanning RNAs (this was to replicate Yeo's old method)
-    # update_ref_gtf = span_gtf(ref_gtf, options.out_dir)
-
-    # run Cufflinks on new gtf file and abundance BAM
     if not options.cuff_done:
+        # make a new gtf w/ unspliced RNAs
+        update_ref_gtf = prerna_gtf(ref_gtf, options.out_dir)
+
+        # make a new gtf file of only loci-spanning RNAs (this was to replicate Yeo's old method)
+        # update_ref_gtf = span_gtf(ref_gtf, options.out_dir)
+
+        # run Cufflinks on new gtf file and abundance BAM
         subprocess.call('cufflinks -o %s -p %d -G %s %s' % (options.out_dir, options.threads, update_ref_gtf, options.abundance_bam), shell=True)
 
     # store transcripts
-    transcripts = read_genes(update_ref_gtf, key_id='transcript_id')
+    transcripts = read_genes('%s/transcripts.gtf'%options.out_dir, key_id='transcript_id')
 
     # merge overlapping genes
-    g2t_merge = merged_g2t(update_ref_gtf, options.out_dir)
+    g2t_merge = merged_g2t('%s/transcripts.gtf'%options.out_dir, options.out_dir)
 
     # set junctions
     set_transcript_junctions(transcripts)
@@ -97,7 +97,7 @@ def main():
         print >> sys.stderr, 'Computing global statistics...'
 
     # count transcriptome CLIP reads (overestimates small RNA single ended reads by counting antisense)
-    subprocess.call('intersectBed -abam %s -b %s > %s/clip.bam' % (clip_bam, update_ref_gtf, options.out_dir), shell=True)
+    subprocess.call('intersectBed -abam %s -b %s > %s/clip.bam' % (clip_bam, '%s/transcripts.gtf'%options.out_dir, options.out_dir), shell=True)
     clip_reads = count_reads('%s/clip.bam' % options.out_dir)
     os.remove('%s/clip.bam' % options.out_dir)
 
@@ -177,7 +177,7 @@ def main():
     # filter peaks using the control
     if options.control_bam:
         # count transcriptome control reads
-        subprocess.call('intersectBed -abam %s -b %s > %s/control.bam' % (options.control_bam, update_ref_gtf, options.out_dir), shell=True)
+        subprocess.call('intersectBed -abam %s -b %s > %s/control.bam' % (options.control_bam, '%s/transcripts.gtf'%options.out_dir, options.out_dir), shell=True)
         control_reads = count_reads('%s/control.bam' % options.out_dir)
         os.remove('%s/control.bam' % options.out_dir)
 
@@ -211,9 +211,10 @@ def main():
     # clean cufflinks output
     if not options.verbose:
         os.remove(update_ref_gtf)
-        os.remove('%s/transcripts.gtf' % options.out_dir)
+        #os.remove('%s/transcripts.gtf' % options.out_dir)
         os.remove('%s/skipped.gtf' % options.out_dir)
         os.remove('%s/genes.fpkm_tracking' % options.out_dir)
+        #os.remove('%s/isoforms.fpkm_tracking' % options.out_dir)
 
 
 ################################################################################
@@ -453,8 +454,15 @@ def count_windows(clip_in, window_size, read_pos_weights, gene_transcripts, gene
     gj_len = len(gene_junctions)
 
     window_stats = []
+    window_lambda = None
 
-    for window_start in range(gene_start, gene_end-window_size+1):
+    # start at either gene_start or the 3rd read (since we need >2 to Poisson test)
+    if rpw_len < 3:
+        first_window_start = gene_end # skip iteration
+    else:
+        first_window_start = max(gene_start, int(read_pos_weights[2][0])-window_size+1)
+
+    for window_start in range(first_window_start, gene_end-window_size+1):
         window_end = window_start + window_size - 1
 
         # update read_window_start
@@ -483,8 +491,7 @@ def count_windows(clip_in, window_size, read_pos_weights, gene_transcripts, gene
             junctions_window_end += 1
 
         # update junction indexes and convolute lambda only if there are junctions in the window
-        if junctions_window_start < junctions_window_end:
-
+        if window_lambda == None or junctions_window_start < junctions_window_end:
             # update junctions indexes (<= comparison because junctions holds the 1st bp of next exon/intron)
             for tid in gene_transcripts:
                 tjunctions = gene_transcripts[tid].junctions
@@ -1288,7 +1295,8 @@ def set_transcript_fpkms(transcripts, out_dir, verbose):
                 print >> sys.stderr, 'WARNING: Missing FPKM for %s' % tid
             missing_fpkms += 1
             transcripts[tid].fpkm = 1000
-    print >> sys.stderr, 'WARNING: %d genes missing FPKM, assigned 1000.' % missing_fpkms
+    if missing_fpkms > 0:
+        print >> sys.stderr, 'WARNING: %d genes missing FPKM, assigned 1000.' % missing_fpkms
 
 
 ################################################################################
