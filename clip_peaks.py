@@ -40,7 +40,7 @@ def main():
 
     # peak calling options
     parser.add_option('-w', dest='window_size', type='int', default=50, help='Window size for scan statistic [Default: %default]')
-    parser.add_option('-p', dest='p_val', type='float', default=.01, help='P-value required of window scan statistic tests [Default: %default]')
+    parser.add_option('-p', dest='p_val', type='float', default=.05, help='P-value required of window scan statistic tests [Default: %default]')
 
     # cufflinks options
     parser.add_option('--cuff_done', dest='cuff_done', action='store_true', default=False, help='A cufflinks run to estimate the model parameters is already done [Default: %default]')
@@ -176,6 +176,9 @@ def main():
 
     # filter peaks using the control
     if options.control_bam:
+        # index
+        subprocess.call('samtools index %s' % options.control_bam, shell=True)
+
         # count transcriptome control reads
         subprocess.call('intersectBed -abam %s -b %s > %s/control.bam' % (options.control_bam, '%s/transcripts.gtf'%options.out_dir, options.out_dir), shell=True)
         control_reads = count_reads('%s/control.bam' % options.out_dir)
