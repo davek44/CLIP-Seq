@@ -217,11 +217,12 @@ def main():
 
     # clean cufflinks output
     if not options.verbose:
-        os.remove(update_ref_gtf)
-        #os.remove('%s/transcripts.gtf' % options.out_dir)
-        os.remove('%s/skipped.gtf' % options.out_dir)
-        os.remove('%s/genes.fpkm_tracking' % options.out_dir)
-        #os.remove('%s/isoforms.fpkm_tracking' % options.out_dir)
+        if not options.cuff_done:
+            os.remove(update_ref_gtf)
+            #os.remove('%s/transcripts.gtf' % options.out_dir)
+            os.remove('%s/skipped.gtf' % options.out_dir)
+            os.remove('%s/genes.fpkm_tracking' % options.out_dir)
+            #os.remove('%s/isoforms.fpkm_tracking' % options.out_dir)
 
 
 ################################################################################
