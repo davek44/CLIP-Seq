@@ -100,9 +100,13 @@ def main():
     subprocess.call('intersectBed -abam %s -b %s > %s/clip.bam' % (clip_bam, '%s/transcripts.gtf'%options.out_dir, options.out_dir), shell=True)
     clip_reads = count_reads('%s/clip.bam' % options.out_dir)
     os.remove('%s/clip.bam' % options.out_dir)
+    if options.verbose:
+        print >> sys.stderr, '\t%d CLIP reads' % clip_reads
 
     # compute # of tests we will perform
     txome_size = transcriptome_size(transcripts, g2t_merge, options.window_size)
+    if options.verbose:
+        print >> sys.stderr, '\t%d transcriptome windows' % txome_size
 
 
     ############################################
@@ -464,6 +468,7 @@ def count_windows(clip_in, window_size, read_pos_weights, gene_transcripts, gene
         first_window_start = gene_end # skip iteration
     else:
         first_window_start = max(gene_start, int(read_pos_weights[2][0])-window_size+1)
+        window_stats += [(0,1)]*(first_window_start-gene_start)
 
     for window_start in range(first_window_start, gene_end-window_size+1):
         window_end = window_start + window_size - 1
