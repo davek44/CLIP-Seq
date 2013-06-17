@@ -43,7 +43,8 @@ def main():
     parser.add_option('-p', dest='p_val', type='float', default=.05, help='P-value required of window scan statistic tests [Default: %default]')
 
     # cufflinks options
-    parser.add_option('--cuff_done', dest='cuff_done', action='store_true', default=False, help='A cufflinks run to estimate the model parameters is already done [Default: %default]')
+    parser.add_option('--cuff_done', dest='cuff_done', action='store_true', default=False, help='The Cufflinks run to estimate the model parameters is already done [Default: %default]')
+    parser.add_option('--compatible-hits-norm', dest='compatible_hits_norm', action='store_true', default=False, help='Count only fragments compatible with the reference transcriptome rather than all mapped reads [Default: %default]')
     parser.add_option('-t', dest='threads', type='int', default=2, help='Number of threads to use [Default: %default]')
 
     # debug options
@@ -79,7 +80,11 @@ def main():
         # update_ref_gtf = span_gtf(ref_gtf, options.out_dir)
 
         # run Cufflinks on new gtf file and abundance BAM
-        subprocess.call('cufflinks -o %s -p %d -G %s %s' % (options.out_dir, options.threads, update_ref_gtf, options.abundance_bam), shell=True)
+        if options.compatible_hits_norm:
+            hits_norm = '--compatible-hits-norm'
+        else:
+            hits_norm = '--total-hits-norm'
+        subprocess.call('cufflinks -o %s -p %d %s -G %s %s' % (options.out_dir, options.threads, hits_norm, update_ref_gtf, options.abundance_bam), shell=True)
 
     # store transcripts
     transcripts = read_genes('%s/transcripts.gtf'%options.out_dir, key_id='transcript_id')
@@ -96,10 +101,14 @@ def main():
     if options.verbose:
         print >> sys.stderr, 'Computing global statistics...'
 
-    # count transcriptome CLIP reads (overestimates small RNA single ended reads by counting antisense)
-    subprocess.call('intersectBed -abam %s -b %s > %s/clip.bam' % (clip_bam, '%s/transcripts.gtf'%options.out_dir, options.out_dir), shell=True)
-    clip_reads = count_reads('%s/clip.bam' % options.out_dir)
-    os.remove('%s/clip.bam' % options.out_dir)
+    if options.compatible_hits_norm:
+        # count transcriptome CLIP reads (overestimates small RNA single ended reads by counting antisense)
+        subprocess.call('intersectBed -abam %s -b %s > %s/clip.bam' % (clip_bam, '%s/transcripts.gtf'%options.out_dir, options.out_dir), shell=True)
+        clip_reads = count_reads('%s/clip.bam' % options.out_dir)
+        os.remove('%s/clip.bam' % options.out_dir)
+    else:
+        # count CLIP reads
+        clip_reads = count_reads(clip_bam)
     if options.verbose:
         print >> sys.stderr, '\t%d CLIP reads' % clip_reads
 
@@ -183,10 +192,16 @@ def main():
         # index
         subprocess.call('samtools index %s' % options.control_bam, shell=True)
 
-        # count transcriptome control reads
-        subprocess.call('intersectBed -abam %s -b %s > %s/control.bam' % (options.control_bam, '%s/transcripts.gtf'%options.out_dir, options.out_dir), shell=True)
-        control_reads = count_reads('%s/control.bam' % options.out_dir)
-        os.remove('%s/control.bam' % options.out_dir)
+        if options.compatible_hits_norm:
+            # count transcriptome control reads
+            subprocess.call('intersectBed -abam %s -b %s > %s/control.bam' % (options.control_bam, '%s/transcripts.gtf'%options.out_dir, options.out_dir), shell=True)
+            control_reads = count_reads('%s/control.bam' % options.out_dir)
+            os.remove('%s/control.bam' % options.out_dir)
+        else:
+            # count countrol reads
+            control_reads = count_reads(options.control_bam)
+        if options.verbose:
+            print >> sys.stderr, '\t%d Control reads' % control_reads
 
         # compute normalization factor for the control
         normalization_factor = clip_reads / control_reads
