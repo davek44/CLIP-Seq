@@ -1441,7 +1441,8 @@ class Peak:
         if self.id:
             cols = [self.chrom, 'clip_peaks', 'peak', str(self.start), str(self.end), str(peak_score), self.strand, '.', 'id "PEAK%d"; gene_id "%s"; fragments "%.1f"; scan_p "%.2e"; multimap_fragments "%.1f"' % (self.id,self.gene_id,self.frags,self.scan_p,self.mm_frags)]
         else:
-            cols = [self.chrom, 'clip_peaks', 'peak', str(self.start), str(self.end), str(peak_score), self.strand, '.', 'gene_id "%s"; fragments "%.1f"; scan_p "%.2e"' % (self.gene_id,self.frags,self.scan_p)]
+            cols = [self.chrom, 'clip_peaks', 'peak', str(self.start), str(self.end), str(peak_score), self.strand, '.', 'gene_id "%s"; fragments "%.1f"; scan_p "%.2e"; multimap_fragments "%.1f"' % (self.gene_id,self.frags,self.scan_p,self.mm_frags)]
+
         if self.control_frags != None:
             cols[-1] += '; control_fragments "%.1f"' % self.control_frags
         if self.control_p != None:
