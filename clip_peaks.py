@@ -25,6 +25,10 @@ import fdr, gff
 #    sensitive here.
 ################################################################################
 
+# globals that are a pain to pass around
+out_dir = None
+verbose = None
+print_filtered_peaks = None
 
 ################################################################################
 # main
@@ -40,8 +44,9 @@ def main():
 
     # peak calling options
     parser.add_option('-w', dest='window_size', type='int', default=50, help='Window size for scan statistic [Default: %default]')
-    parser.add_option('-p', dest='p_val', type='float', default=.05, help='P-value required of window scan statistic tests [Default: %default]')
-    parser.add_option('-m', '--max_multimap_fraction' dest='max_multimap_fraction', type='float', default=0.5, help='Maximum proportion of the read count that can be contributed by multimapping reads [Default: %default]')
+    parser.add_option('-p', dest='p_val', type='float', default=.01, help='P-value required of window scan statistic tests [Default: %default]')
+    parser.add_option('-m', '--max_multimap_fraction', dest='max_multimap_fraction', type='float', default=0.5, help='Maximum proportion of the read count that can be contributed by multimapping reads [Default: %default]')
+    parser.add_option('-f', dest='print_filtered_peaks', action='store_true', default=False, help='Print peaks filtered at each step [Default: %default]')
 
     # cufflinks options
     parser.add_option('--cuff_done', dest='cuff_done', action='store_true', default=False, help='The Cufflinks run to estimate the model parameters is already done [Default: %default]')
@@ -61,13 +66,18 @@ def main():
         clip_bam = args[0]
         ref_gtf = args[1]
 
-    if not os.path.isdir(options.out_dir):
-        os.mkdir(options.out_dir)
+    # set globals
+    out_dir = options.out_dir
+    verbose = options.verbose
+    print_filtered_peaks = options.print_filtered_peaks
+
+    if not os.path.isdir(out_dir):
+        os.mkdir(out_dir)
 
     ############################################
     # parameterize
     ############################################
-    if options.verbose:
+    if verbose:
         print >> sys.stderr, 'Estimating gene abundances...'
 
     if options.abundance_bam == None:
@@ -75,47 +85,47 @@ def main():
 
     if not options.cuff_done:
         # make a new gtf w/ unspliced RNAs
-        update_ref_gtf = prerna_gtf(ref_gtf, options.out_dir)
+        update_ref_gtf = prerna_gtf(ref_gtf)
 
         # make a new gtf file of only loci-spanning RNAs (this was to replicate Yeo's old method)
-        # update_ref_gtf = span_gtf(ref_gtf, options.out_dir)
+        # update_ref_gtf = span_gtf(ref_gtf)
 
         # run Cufflinks on new gtf file and abundance BAM
         if options.compatible_hits_norm:
             hits_norm = '--compatible-hits-norm'
         else:
             hits_norm = '--total-hits-norm'
-        subprocess.call('cufflinks -o %s -p %d %s -G %s %s' % (options.out_dir, options.threads, hits_norm, update_ref_gtf, options.abundance_bam), shell=True)
+        subprocess.call('cufflinks -o %s -p %d %s -G %s %s' % (out_dir, options.threads, hits_norm, update_ref_gtf, options.abundance_bam), shell=True)
 
     # store transcripts
-    transcripts = read_genes('%s/transcripts.gtf'%options.out_dir, key_id='transcript_id')
+    transcripts = read_genes('%s/transcripts.gtf'%out_dir, key_id='transcript_id')
 
     # merge overlapping genes
-    g2t_merge = merged_g2t('%s/transcripts.gtf'%options.out_dir, options.out_dir)
+    g2t_merge = merged_g2t('%s/transcripts.gtf'%out_dir)
 
     # set junctions
     set_transcript_junctions(transcripts)
 
     # set transcript FPKMs
-    set_transcript_fpkms(transcripts, options.out_dir, options.verbose)
+    set_transcript_fpkms(transcripts)
 
-    if options.verbose:
+    if verbose:
         print >> sys.stderr, 'Computing global statistics...'
 
     if options.compatible_hits_norm:
         # count transcriptome CLIP reads (overestimates small RNA single ended reads by counting antisense)
-        subprocess.call('intersectBed -abam %s -b %s > %s/clip.bam' % (clip_bam, '%s/transcripts.gtf'%options.out_dir, options.out_dir), shell=True)
-        clip_reads = count_reads('%s/clip.bam' % options.out_dir)
-        os.remove('%s/clip.bam' % options.out_dir)
+        subprocess.call('intersectBed -abam %s -b %s > %s/clip.bam' % (clip_bam, '%s/transcripts.gtf'%out_dir, out_dir), shell=True)
+        clip_reads = count_reads('%s/clip.bam' % out_dir)
+        os.remove('%s/clip.bam' % out_dir)
     else:
         # count CLIP reads
         clip_reads = count_reads(clip_bam)
-    if options.verbose:
+    if verbose:
         print >> sys.stderr, '\t%d CLIP reads' % clip_reads
 
     # compute # of tests we will perform
     txome_size = transcriptome_size(transcripts, g2t_merge, options.window_size)
-    if options.verbose:
+    if verbose:
         print >> sys.stderr, '\t%d transcriptome windows' % txome_size
 
 
@@ -131,7 +141,7 @@ def main():
     # open window output
     windows_out = None
     if options.print_windows:
-        windows_out = open('%s/window_stats.txt' % options.out_dir, 'w')
+        windows_out = open('%s/window_stats.txt' % out_dir, 'w')
 
     # possibly limit genes to examine
     if options.gene_only:
@@ -147,10 +157,11 @@ def main():
 
     # initalize peak list
     putative_peaks = []
+    multimap_peaks = []
 
     # for each gene
     for gene_id in gene_ids:
-        if options.verbose:
+        if verbose:
             print >> sys.stderr, 'Processing %s...' % gene_id
 
         # make a more focused transcript hash for this gene
@@ -161,7 +172,7 @@ def main():
         # obtain basic gene attributes
         (gchrom, gstrand, gstart, gend) = gene_attrs(gene_transcripts)
 
-        if options.verbose:
+        if verbose:
             print >> sys.stderr, '\tFetching alignments...'
 
         # choose a single event position and weight the reads
@@ -170,21 +181,27 @@ def main():
         # find splice junctions
         #junctions = map_splice_junctions(tx)
 
-        if options.verbose:
+        if verbose:
             print >> sys.stderr, '\tCounting and computing in windows...'
 
         # count reads and compute p-values in windows
         window_stats = count_windows(clip_in, options.window_size, read_pos_weights, gene_transcripts, gstart, gend, clip_reads, txome_size, windows_out)
 
-        if options.verbose:
+        if verbose:
             print >> sys.stderr, '\tRefining peaks...'
 
         # post-process windows to peaks
-        peaks = windows2peaks(read_pos_weights, gene_transcripts, gstart, window_stats, options.window_size, options.p_val, clip_reads, txome_size)
+        peaks, mm_peaks = windows2peaks(read_pos_weights, gene_transcripts, gstart, window_stats, options.window_size, options.p_val, options.max_multimap_fraction, clip_reads, txome_size)
 
         # save peaks
         for pstart, pend, pfrags, ppval in peaks:
             putative_peaks.append(Peak(gchrom, pstart, pend, gstrand, gene_id, pfrags, ppval))
+
+        # save mm peaks
+        if verbose or print_filtered_peaks:
+            for pstart, pend, pfrags, ppval in mm_peaks:
+                multimap_peaks.append(Peak(gchrom, pstart, pend, gstrand, gene_id, pfrags, ppval))
+
 
     clip_in.close()
 
@@ -195,35 +212,35 @@ def main():
 
         if options.compatible_hits_norm:
             # count transcriptome control reads
-            subprocess.call('intersectBed -abam %s -b %s > %s/control.bam' % (options.control_bam, '%s/transcripts.gtf'%options.out_dir, options.out_dir), shell=True)
-            control_reads = count_reads('%s/control.bam' % options.out_dir)
-            os.remove('%s/control.bam' % options.out_dir)
+            subprocess.call('intersectBed -abam %s -b %s > %s/control.bam' % (options.control_bam, '%s/transcripts.gtf'%out_dir, out_dir), shell=True)
+            control_reads = count_reads('%s/control.bam' % out_dir)
+            os.remove('%s/control.bam' % out_dir)
         else:
             # count countrol reads
             control_reads = count_reads(options.control_bam)
-        if options.verbose:
+        if verbose:
             print >> sys.stderr, '\t%d Control reads' % control_reads
 
         # compute normalization factor for the control
         normalization_factor = clip_reads / control_reads
 
         # estimate overdispersion
-        if options.verbose:
+        if verbose:
             print >> sys.stderr, 'Estimating overdispersion...'
-        overdispersion = estimate_overdispersion(clip_bam, options.control_bam, g2t_merge, transcripts, options.window_size, normalization_factor, options.out_dir, options.verbose)
-        if options.verbose:
+        overdispersion = estimate_overdispersion(clip_bam, options.control_bam, g2t_merge, transcripts, options.window_size, normalization_factor)
+        if verbose:
             print >> sys.stderr, 'Overdisperion estimated to be %f' % overdispersion
 
         # filter peaks 
-        if options.verbose:
+        if verbose:
             print >> sys.stderr, 'Filtering peaks using control BAM...'
-        final_peaks = filter_peaks_control(putative_peaks, options.p_val, overdispersion, options.control_bam, normalization_factor, options.out_dir, options.verbose)
+        final_peaks = filter_peaks_control(putative_peaks, options.p_val, overdispersion, options.control_bam, normalization_factor)
 
     else:
         final_peaks = putative_peaks
 
     # output peaks as gff
-    peaks_out = open('%s/peaks.gff' % options.out_dir, 'w')
+    peaks_out = open('%s/peaks.gff' % out_dir, 'w')
     peak_id = 1
     for peak in final_peaks:
         peak.id = peak_id
@@ -231,14 +248,18 @@ def main():
         peak_id += 1
     peaks_out.close()
 
+    if verbose or print_filtered_peaks:
+        mm_peaks_out = open('%s/filtered_peaks_multimap.gff' % out_dir, 'w')
+        for peak in multimap_peaks:
+            print >> mm_peaks_out, peak.gff_str()
+        mm_peaks_out.close()
+
     # clean cufflinks output
-    if not options.verbose:
+    if not verbose:
         if not options.cuff_done:
             os.remove(update_ref_gtf)
-            #os.remove('%s/transcripts.gtf' % options.out_dir)
-            os.remove('%s/skipped.gtf' % options.out_dir)
-            os.remove('%s/genes.fpkm_tracking' % options.out_dir)
-            #os.remove('%s/isoforms.fpkm_tracking' % options.out_dir)
+            os.remove('%s/skipped.gtf' % out_dir)
+            os.remove('%s/genes.fpkm_tracking' % out_dir)
 
 
 ################################################################################
@@ -555,13 +576,11 @@ def count_windows(clip_in, window_size, read_pos_weights, gene_transcripts, gene
 #  transcripts:   Hash mapping transcript_id keys to Gene class instances.
 #  window_size:   Scan statistic window size.
 #  norm_factor:   Ratio of total transcriptome CLIP to control reads
-#  out_dir:       Directory in which to output the expanded GTF file.
-#  verbose:       Print more verbose output.
 #
 # Outputs:
 #  overdisperion: Estimated overdispersion parameter.
 ################################################################################
-def estimate_overdispersion(clip_bam, control_bam, g2t, transcripts, window_size, norm_factor, out_dir, verbose):
+def estimate_overdispersion(clip_bam, control_bam, g2t, transcripts, window_size, norm_factor):
     clip_in = pysam.Samfile(clip_bam)
     control_in = pysam.Samfile(control_bam)
 
@@ -654,13 +673,11 @@ def estimate_overdispersion(clip_bam, control_bam, g2t, transcripts, window_size
 #  overdispersion: Negative binomial overdispersion parameter.
 #  control_bam:    BAM file to inform control filtering.
 #  norm_factor:    Ratio of total transcriptome CLIP to control reads
-#  out_dir:        Directory in which to output the expanded GTF file.
-#  verbose:        Print more verbose output.
 #
 # Output
 #  filtered_peaks: List of filtered Peak objects w/ attribute control_p set.
 ################################################################################
-def filter_peaks_control(putative_peaks, p_val, overdispersion, control_bam, norm_factor, out_dir, verbose):
+def filter_peaks_control(putative_peaks, p_val, overdispersion, control_bam, norm_factor):
     # number of bp to expand each peak by to check the control
     fuzz = 3
 
@@ -670,9 +687,9 @@ def filter_peaks_control(putative_peaks, p_val, overdispersion, control_bam, nor
     # initialize p-value list for later FDR correction
     control_p_values = []
 
-    if verbose:
+    if verbose or print_filtered_peaks:
         # open file to print filtered peaks
-        control_filter_out = open('%s/control_filter_peaks.gff' % out_dir, 'w')
+        control_filter_out = open('%s/filtered_peaks_control.gff' % out_dir, 'w')
 
     # for each peak
     for peak in putative_peaks:
@@ -682,7 +699,7 @@ def filter_peaks_control(putative_peaks, p_val, overdispersion, control_bam, nor
         read_pos_weights = position_reads(control_in, peak.chrom, peak.start-fuzz, peak.end+fuzz, peak.strand)
 
         # sum weights
-        read_positions = [pos for (pos,w) in read_pos_weights] 
+        read_positions = [pos for (pos,w,mm) in read_pos_weights] 
         reads_start_i = bisect_left(read_positions, peak.start-fuzz)
         reads_end_i = bisect_right(read_positions, peak.end+fuzz)
         control_frags = sum([read_pos_weights[i][1] for i in range(reads_start_i,reads_end_i)])
@@ -718,10 +735,10 @@ def filter_peaks_control(putative_peaks, p_val, overdispersion, control_bam, nor
         peak.control_p = control_q_values[i]
         if control_q_values[i] <= p_val:
             filtered_peaks.append(peak)
-        elif verbose:
+        elif verbose or print_filtered_peaks:
             print >> control_filter_out, peak.gff_str()
 
-    if verbose:
+    if verbose or print_filtered_peaks:
         control_filter_out.close()
 
     return filtered_peaks
@@ -794,12 +811,11 @@ def get_gene_regions(transcripts):
 #
 # Input
 #  ref_gtf: GTF file
-#  out_dir: Directory in which to output the expanded GTF file.
 #
 # Output
 #  g2t:     Hash mapping gene_id's to transcript_id's
 ################################################################################
-def merged_g2t(ref_gtf, out_dir):
+def merged_g2t(ref_gtf):
     # make gene span file
     span_gtf(ref_gtf, out_dir, level='gene_id')
 
@@ -844,20 +860,23 @@ def merged_g2t(ref_gtf, out_dir):
 # the reads in the new intervals.
 #
 # Input
-#  trimmed_windows:  List of (start,end) tuples for significant windows, trimmed
-#                     to be tight around read midpoints.
-#  read_pos_weights: Sorted list of read alignment positions and weights.
+#  trimmed_windows:       List of (start,end) tuples for significant windows, trimmed
+#                          to be tight around read midpoints.
+#  read_pos_weights:      Sorted list of read alignment positions and weights.
+#  max_multimap_fraction: Maximum proportion of fragments that can be
 #
 # Output
-#  peaks:            List of (start,end,count) tuples for significant trimmed
-#                     and merged windows
+#  peaks:                 List of (start,end,count) tuples for significant trimmed
+#                          and merged windows
+#  mm_peaks:              Peaks removed by too many multimappers.
 ################################################################################
-def merge_peaks_count(trimmed_windows, read_pos_weights):
+def merge_peaks_count(trimmed_windows, read_pos_weights, max_multimap_fraction):
     peaks = []
+    mm_peaks = []
 
     if trimmed_windows:
         # get read positions for easy bisecting
-        read_positions = [pos for (pos,w) in read_pos_weights]
+        read_positions = [pos for (pos,w,mm) in read_pos_weights]
 
         # initalize first peak
         pstart, pend = trimmed_windows[0]
@@ -870,7 +889,12 @@ def merge_peaks_count(trimmed_windows, read_pos_weights):
                 reads_start_i = bisect_left(read_positions, pstart)
                 reads_end_i = bisect_right(read_positions, pend)
                 read_count = sum([read_pos_weights[i][1] for i in range(reads_start_i,reads_end_i)])
-                peaks.append((pstart, pend, read_count))
+                mm_count = sum([read_pos_weights[i][1] for i in range(reads_start_i,reads_end_i) if read_pos_weights[i][2]])
+
+                if mm_count / read_count <= max_multimap_fraction:
+                    peaks.append((pstart, pend, read_count))
+                else:
+                    mm_peaks.append(pstart, pend, read_count)
 
                 # initialize next peak
                 pstart = tw_start
@@ -883,7 +907,12 @@ def merge_peaks_count(trimmed_windows, read_pos_weights):
         reads_start_i = bisect_left(read_positions, pstart)
         reads_end_i = bisect_right(read_positions, pend)
         read_count = sum([read_pos_weights[i][1] for i in range(reads_start_i,reads_end_i)])
-        peaks.append((pstart, pend, read_count))
+        mm_count = sum([read_pos_weights[i][1] for i in range(reads_start_i,reads_end_i) if read_pos_weights[i][2]])
+
+        if mm_count / read_count <= max_multimap_fraction:
+            peaks.append((pstart, pend, read_count))
+        else:
+            mm_peaks.append((pstart, pend, read_count))
 
     return peaks
 
@@ -980,7 +1009,7 @@ def peak_stats(windows_counts, gene_transcripts, total_reads, txome_size):
 #  gene_strand:      Strand of the gene of interest.
 #
 # Output
-#  read_pos_weights: Sorted list of read alignment positions and weights.
+#  read_pos_weights: Sorted list of read alignment (position, weight, multimap)
 ################################################################################
 def position_reads(clip_in, gene_chrom, gene_start, gene_end, gene_strand):
     read_pos_weights = []
@@ -1007,12 +1036,12 @@ def position_reads(clip_in, gene_chrom, gene_start, gene_end, gene_strand):
                 if aligned_read.is_paired:
                     # map read to endpoint (closer to fragment center)
                     if aligned_read.is_reverse:
-                        read_pos_weights.append((aligned_read.pos, 0.5/nh_tag))
+                        read_pos_weights.append((aligned_read.pos, 0.5/nh_tag, nh_tag>1))
                     else:
-                        read_pos_weights.append((cigar_endpoint(aligned_read), 0.5/nh_tag))
+                        read_pos_weights.append((cigar_endpoint(aligned_read), 0.5/nh_tag, nh_tag>1))
                 else:
                     # map read to midpoint
-                    read_pos_weights.append((cigar_midpoint(aligned_read), 1.0/nh_tag))
+                    read_pos_weights.append((cigar_midpoint(aligned_read), 1.0/nh_tag, nh_tag>1))
 
         # in case of differing read alignment lengths
         read_pos_weights.sort()
@@ -1028,13 +1057,12 @@ def position_reads(clip_in, gene_chrom, gene_start, gene_end, gene_strand):
 #
 # Input
 #  ref_gtf:     Reference GTF file to expand with unspliced preRNAs.
-#  out_dir:     Directory in which to output the expanded GTF file.
 #
 # Output
 #  prerna.gtf:  Expanded GTF file.
 #  pre_ref_gtf: The filename of the expanded GTF file.
 ################################################################################
-def prerna_gtf(ref_gtf, out_dir):
+def prerna_gtf(ref_gtf):
     # make transcript span file
     span_gtf(ref_gtf, out_dir, level='transcript_id')
 
@@ -1160,12 +1188,11 @@ def scan_stat_approx3(k, w, T, lambd):
 #
 # Input
 #  transcripts: Hash mapping transcript_id to isoform Gene objects.
-#  out_dir:     Directory in which to output the gene span GTF file.
 # 
 # Output
 #  transcripts: Same hash, FPKM attribute set.
 ################################################################################
-def set_transcript_fpkms(transcripts, out_dir, verbose):
+def set_transcript_fpkms(transcripts):
     # read from isoforms.fpkm_tracking
     fpkm_in = open('%s/isoforms.fpkm_tracking' % out_dir)
     line = fpkm_in.readline()
@@ -1226,14 +1253,13 @@ def set_transcript_junctions(transcripts):
 #
 # Input
 #  ref_gtf:      Reference GTF file to convert to gene spans.
-#  out_dir:      Directory in which to output the gene span GTF file.
 #  level:        gene_id or transcript_id
 #
 # Output
 #  span.gtf:     Gene span GTF file.
 #  span_ref_gtf: The filename of the gene span GTF file.
 ################################################################################
-def span_gtf(ref_gtf, out_dir, level='gene_id'):
+def span_gtf(ref_gtf, level='gene_id'):
     # obtain gene regions
     transcripts = read_genes(ref_gtf, key_id='transcript_id')
 
@@ -1307,7 +1333,7 @@ def transcriptome_size(transcripts, g2t, window_size):
 #                     to be tight around read midpoints.
 ################################################################################
 def trim_windows(windows, read_pos_weights):
-    read_positions = [pos for (pos,w) in read_pos_weights]
+    read_positions = [pos for (pos,w,mm) in read_pos_weights]
     trimmed_windows = []
     for wstart, wend in windows:
         trim_start_i = bisect_left(read_positions, wstart)
@@ -1323,25 +1349,33 @@ def trim_windows(windows, read_pos_weights):
 # Convert window counts and p-values to peak calls.
 #
 # Input
-#  read_pos_weights: Sorted list of read alignment positions and weights.
-#  gene_transcripts: Hash mapping transcript_id to isoform Gene objects,
-#                     containing only keys for a specific gene.
-#  gene_start:       Start of the gene's span.
-#  window_stats:     Counts and p-values for each window.
-#  window_size:      Scan statistic window size.
-#  sig_p:            P-value at which to call window counts significant.
-#  total_reads:      Total number of reads aligned to the transcriptome.
-#  txome_size:       Total number of bp in the transcriptome.
+#  read_pos_weights:      Sorted list of read alignment positions and weights.
+#  gene_transcripts:      Hash mapping transcript_id to isoform Gene objects,
+#                          containing only keys for a specific gene.
+#  gene_start:            Start of the gene's span.
+#  window_stats:          Counts and p-values for each window.
+#  window_size:           Scan statistic window size.
+#  sig_p:                 P-value at which to call window counts significant.
+#  max_multimap_fraction: Maximum proportion of fragments that can be
+#                          multimapping to keep the peak.
+#  total_reads:           Total number of reads aligned to the transcriptome.
+#  txome_size:            Total number of bp in the transcriptome.
 #
 # Output
-#  peaks:            List of (start,end,count,p-val) tuples for peaks.
+#  peaks:                 List of (start,end,count,p-val) tuples for peaks.
+#  mm_peaks:              Peaks removed by too many multimappers.
 ################################################################################
-def windows2peaks(read_pos_weights, gene_transcripts, gene_start, window_stats, window_size, sig_p, total_reads, txome_size):
+def windows2peaks(read_pos_weights, gene_transcripts, gene_start, window_stats, window_size, sig_p, max_multimap_fraction, total_reads, txome_size):
     merged_windows = merge_windows(window_stats, window_size, sig_p, gene_start)
     trimmed_windows = trim_windows(merged_windows, read_pos_weights)
-    statless_peaks = merge_peaks_count(trimmed_windows, read_pos_weights)
+    statless_peaks, mm_statless_peaks = merge_peaks_count(trimmed_windows, read_pos_weights, max_multimap_fraction)
     peaks = peak_stats(statless_peaks, gene_transcripts, total_reads, txome_size)
-    return peaks
+    if verbose or print_filtered_peaks:
+        mm_peaks = peak_stats(mm_statless_peaks, gene_transcripts, total_reads, txome_size)
+    else:
+        mm_peaks = []
+        
+    return peaks, mm_peaks
 
 
 ################################################################################
