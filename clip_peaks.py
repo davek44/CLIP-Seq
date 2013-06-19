@@ -45,7 +45,7 @@ def main():
     # peak calling options
     parser.add_option('-w', dest='window_size', type='int', default=50, help='Window size for scan statistic [Default: %default]')
     parser.add_option('-p', dest='p_val', type='float', default=.01, help='P-value required of window scan statistic tests [Default: %default]')
-    parser.add_option('-m', '--max_multimap_fraction', dest='max_multimap_fraction', type='float', default=0.5, help='Maximum proportion of the read count that can be contributed by multimapping reads [Default: %default]')
+    parser.add_option('-m', '--max_multimap_fraction', dest='max_multimap_fraction', type='float', default=0.2, help='Maximum proportion of the read count that can be contributed by multimapping reads [Default: %default]')
     parser.add_option('-f', dest='print_filtered_peaks', action='store_true', default=False, help='Print peaks filtered at each step [Default: %default]')
 
     # cufflinks options
@@ -1192,6 +1192,7 @@ def scan_stat_approx3(k, w, T, lambd):
 def set_transcript_fpkms(transcripts):
     # read from isoforms.fpkm_tracking
     fpkm_in = open('%s/isoforms.fpkm_tracking' % out_dir)
+
     line = fpkm_in.readline()
     for line in fpkm_in:
         a = line.split('\t')
@@ -1200,7 +1201,13 @@ def set_transcript_fpkms(transcripts):
         tid = a[0]
         fpkm = float(a[9])
 
-        transcripts[tid].fpkm = fpkm
+        if a[12] != 'FAIL':
+            transcripts[tid].fpkm = fpkm
+        else:
+            transcripts[tid].fpkm = 1000000
+            if verbose:
+                print >> sys.stderr, 'WARNING: Cufflinks failed for %s' % tid
+
     fpkm_in.close()
 
     # fill in those that go missing
@@ -1210,9 +1217,9 @@ def set_transcript_fpkms(transcripts):
             if verbose:
                 print >> sys.stderr, 'WARNING: Missing FPKM for %s' % tid
             missing_fpkms += 1
-            transcripts[tid].fpkm = 1000
+            transcripts[tid].fpkm = 1000000
     if missing_fpkms > 0:
-        print >> sys.stderr, 'WARNING: %d genes missing FPKM, assigned 1000.' % missing_fpkms
+        print >> sys.stderr, 'WARNING: %d genes missing FPKM, assigned 1000000.' % missing_fpkms
 
 
 ################################################################################
