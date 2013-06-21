@@ -773,12 +773,22 @@ def filter_peaks_ignore(putative_peaks, ignore_gff):
         print >> peaks_out, peak.gff_str()
     peaks_out.close()
 
+    # add fuzz to ignore_gff
+    fuzz = 10
+    ignorez_out = open('%s/ignore_fuzz.gff' % out_dir, 'w')
+    for line in open(ignore_gff):
+        a = line.split('\t')
+        a[3] = max(1, str(int(a[3])-fuzz))
+        a[4] = str(int(a[4])+fuzz)
+        print >> ignorez_out, '\t'.join(a)
+    ignorez_out.close()
+
     # intersect with ignore regions
-    subprocess.call('intersectBed -u -a %s/putative.gff -b %s > %s/ignore.gff' % (out_dir,ignore_gff,out_dir), shell=True)
+    subprocess.call('intersectBed -u -a %s/putative.gff -b %s/ignore_fuzz.gff > %s/filtered_peaks_ignore.gff' % (out_dir,out_dir,out_dir), shell=True)
 
     # hash ignored peaks
     ignored_peaks = set()
-    for line in open('%s/ignore.gff' % out_dir):
+    for line in open('%s/filtered_peaks_ignore.gff' % out_dir):
         a = line.split('\t')
         peak_tuple = (a[0], int(a[3]), int(a[4]), a[6])
         ignored_peaks.add(peak_tuple)
@@ -791,6 +801,7 @@ def filter_peaks_ignore(putative_peaks, ignore_gff):
             filtered_peaks.append(peak)
 
     # clean
+    os.remove('%s/ignore_fuzz.gff' % out_dir)
     os.remove('%s/putative.gff' % out_dir)
 
     return filtered_peaks
