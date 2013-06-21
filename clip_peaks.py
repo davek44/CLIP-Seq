@@ -180,7 +180,7 @@ def main():
             print >> sys.stderr, '\tFetching alignments...'
 
         # choose a single event position and weight the reads
-        read_pos_weights = position_reads(clip_in, gchrom, gstart, gend, gstrand)
+        read_pos_weights = position_reads(clip_in, gchrom, gstart, gend, gstrand, mapq_zero=True)
 
         # find splice junctions
         #junctions = map_splice_junctions(tx)
@@ -198,8 +198,8 @@ def main():
         peaks = windows2peaks(read_pos_weights, gene_transcripts, gstart, window_stats, options.window_size, options.p_val, clip_reads, txome_size)
 
         # save peaks
-        for pstart, pend, pfrags, pmmfrags, ppval in peaks:
-            putative_peaks.append(Peak(gchrom, pstart, pend, gstrand, gene_id, pfrags, pmmfrags, ppval))
+        for pstart, pend, pfrags, pmmfrac, ppval in peaks:
+            putative_peaks.append(Peak(gchrom, pstart, pend, gstrand, gene_id, pfrags, pmmfrac, ppval))
 
     clip_in.close()
 
@@ -255,7 +255,7 @@ def main():
     peak_id = 1
     for peak in final_peaks:
         # filter out multimap-dominated peaks
-        if peak.mm_frags / peak.frags <= options.max_multimap_fraction:
+        if peak.mm_frac <= options.max_multimap_fraction:
             peak.id = peak_id
             print >> peaks_out, peak.gff_str()
             peak_id += 1
@@ -949,10 +949,12 @@ def merge_peaks_count(trimmed_windows, read_pos_weights):
                 # close last peak
                 reads_start_i = bisect_left(read_positions, pstart)
                 reads_end_i = bisect_right(read_positions, pend)
-                read_count = sum([read_pos_weights[i][1] for i in range(reads_start_i,reads_end_i)])
-                mm_count = sum([read_pos_weights[i][1] for i in range(reads_start_i,reads_end_i) if read_pos_weights[i][2]])
 
-                peaks.append((pstart, pend, read_count, mm_count))
+                read_count = sum([read_pos_weights[i][1] for i in range(reads_start_i,reads_end_i)])
+                mm_count = sum([1 for i in range(reads_start_i,reads_end_i) if read_pos_weights[i][2]])
+                mm_fraction = mm_count / float(reads_end_i-reads_start_i)
+
+                peaks.append((pstart, pend, read_count, mm_fraction))
 
                 # initialize next peak
                 pstart = tw_start
@@ -964,10 +966,12 @@ def merge_peaks_count(trimmed_windows, read_pos_weights):
         # close last peak
         reads_start_i = bisect_left(read_positions, pstart)
         reads_end_i = bisect_right(read_positions, pend)
-        read_count = sum([read_pos_weights[i][1] for i in range(reads_start_i,reads_end_i)])
-        mm_count = sum([read_pos_weights[i][1] for i in range(reads_start_i,reads_end_i) if read_pos_weights[i][2]])
 
-        peaks.append((pstart, pend, read_count, mm_count))
+        read_count = sum([read_pos_weights[i][1] for i in range(reads_start_i,reads_end_i)])
+        mm_count = sum([1 for i in range(reads_start_i,reads_end_i) if read_pos_weights[i][2]])
+        mm_fraction = mm_count / float(reads_end_i-reads_start_i)
+
+        peaks.append((pstart, pend, read_count, mm_fraction))
 
     return peaks
 
@@ -1062,11 +1066,12 @@ def peak_stats(windows_counts, gene_transcripts, total_reads, txome_size):
 #  gene_start:       Start coordinate of the gene of interest.
 #  gene_end:         End coordinate of the gene of interest.
 #  gene_strand:      Strand of the gene of interest.
+#  mapq_zero:        Return reads with zero mapq.
 #
 # Output
 #  read_pos_weights: Sorted list of read alignment (position, weight, multimap)
 ################################################################################
-def position_reads(clip_in, gene_chrom, gene_start, gene_end, gene_strand):
+def position_reads(clip_in, gene_chrom, gene_start, gene_end, gene_strand, mapq_zero=False):
     read_pos_weights = []
 
     if gene_chrom in clip_in.references:
@@ -1080,23 +1085,24 @@ def position_reads(clip_in, gene_chrom, gene_start, gene_end, gene_strand):
                 if aligned_read.is_reverse:
                     ar_strand = '-'
 
-            # count multimaps
-            try:
-                nh_tag = aligned_read.opt('NH')
-            except:
-                nh_tag = 1
+            # downweight multimappers
+            if aligned_read.mapq > 0:
+                mm_weight = 1.0/aligned_read.opt('NH')
+            else:
+                mm_weight = 0.0
 
             # check strand and quality
-            if gene_strand == ar_strand and aligned_read.mapq > 0:
-                if aligned_read.is_paired:
-                    # map read to endpoint (closer to fragment center)
-                    if aligned_read.is_reverse:
-                        read_pos_weights.append((aligned_read.pos, 0.5/nh_tag, nh_tag>1))
+            if gene_strand == ar_strand:
+                if mapq_zero or aligned_read.mapq > 0:
+                    if aligned_read.is_paired:
+                        # map read to endpoint (closer to fragment center)
+                        if aligned_read.is_reverse:
+                            read_pos_weights.append((aligned_read.pos, 0.5*mm_weight, mm_weight<1))
+                        else:
+                            read_pos_weights.append((cigar_endpoint(aligned_read), 0.5*mm_weight, mm_weight<1))
                     else:
-                        read_pos_weights.append((cigar_endpoint(aligned_read), 0.5/nh_tag, nh_tag>1))
-                else:
-                    # map read to midpoint
-                    read_pos_weights.append((cigar_midpoint(aligned_read), 1.0/nh_tag, nh_tag>1))
+                        # map read to midpoint
+                        read_pos_weights.append((cigar_midpoint(aligned_read), 1.0*mm_weight, mm_weight<1))
 
         # in case of differing read alignment lengths
         read_pos_weights.sort()
@@ -1395,12 +1401,11 @@ def transcriptome_size(transcripts, g2t, window_size):
 #                     to be tight around read midpoints.
 ################################################################################
 def trim_windows(windows, read_pos_weights):
-    read_positions = [pos for (pos,w,mm) in read_pos_weights]
+    read_positions = [pos for (pos,w,mm) in read_pos_weights if w>0]
     trimmed_windows = []
     for wstart, wend in windows:
         trim_start_i = bisect_left(read_positions, wstart)
         trim_end_i = bisect_right(read_positions, wend)
-        # TODO: When are these ever not integers?
         trimmed_windows.append((int(read_positions[trim_start_i]), int(read_positions[trim_end_i-1]+0.5)))
     return trimmed_windows
 
@@ -1479,7 +1484,7 @@ class Gene:
 # Peak class
 ################################################################################
 class Peak:
-    def __init__(self, chrom, start, end, strand, gene_id, frags, mm_frags, scan_p):
+    def __init__(self, chrom, start, end, strand, gene_id, frags, mm_frac, scan_p):
         self.chrom = chrom
         self.start = start
         self.end = end
@@ -1487,7 +1492,7 @@ class Peak:
         self.gene_id = gene_id
         self.id = None
         self.frags = frags
-        self.mm_frags = mm_frags
+        self.mm_frac = mm_frac
         self.control_frags = None
         self.scan_p = scan_p
         self.control_p = None
@@ -1504,9 +1509,9 @@ class Peak:
             peak_score = 1000
 
         if self.id:
-            cols = [self.chrom, 'clip_peaks', 'peak', str(self.start), str(self.end), str(peak_score), self.strand, '.', 'id "PEAK%d"; gene_id "%s"; fragments "%.1f"; scan_p "%.2e"; multimap_fragments "%.1f"' % (self.id,self.gene_id,self.frags,self.scan_p,self.mm_frags)]
+            cols = [self.chrom, 'clip_peaks', 'peak', str(self.start), str(self.end), str(peak_score), self.strand, '.', 'id "PEAK%d"; gene_id "%s"; fragments "%.1f"; scan_p "%.2e"; multimap_fraction "%.3f"' % (self.id,self.gene_id,self.frags,self.scan_p,self.mm_frac)]
         else:
-            cols = [self.chrom, 'clip_peaks', 'peak', str(self.start), str(self.end), str(peak_score), self.strand, '.', 'gene_id "%s"; fragments "%.1f"; scan_p "%.2e"; multimap_fragments "%.1f"' % (self.gene_id,self.frags,self.scan_p,self.mm_frags)]
+            cols = [self.chrom, 'clip_peaks', 'peak', str(self.start), str(self.end), str(peak_score), self.strand, '.', 'gene_id "%s"; fragments "%.1f"; scan_p "%.2e"; multimap_fraction "%.3f"' % (self.gene_id,self.frags,self.scan_p,self.mm_frac)]
 
         if self.control_frags != None:
             cols[-1] += '; control_fragments "%.1f"' % self.control_frags
