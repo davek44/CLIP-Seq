@@ -1081,9 +1081,8 @@ def position_reads(clip_in, gene_chrom, gene_start, gene_end, gene_strand, mapq_
             try:
                 ar_strand = aligned_read.opt('XS')
             except:
-                ar_strand = '+'
-                if aligned_read.is_reverse:
-                    ar_strand = '-'
+                # just allow it
+                ar_strand = gene_strand
 
             # downweight multimappers
             if aligned_read.mapq > 0:
