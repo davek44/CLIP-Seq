@@ -3,7 +3,7 @@ from optparse import OptionParser
 from scipy.stats import poisson, nbinom
 from numpy import array
 from bisect import bisect_left, bisect_right
-import copy, math, os, pdb, random, subprocess, sys, tempfile
+import copy, math, os, pdb, random, subprocess, sys
 import pysam
 import fdr, gff
 
@@ -47,6 +47,7 @@ def main():
     parser.add_option('-p', dest='p_val', type='float', default=.01, help='P-value required of window scan statistic tests [Default: %default]')
     parser.add_option('-m', '--max_multimap_fraction', dest='max_multimap_fraction', type='float', default=0.2, help='Maximum proportion of the read count that can be contributed by multimapping reads [Default: %default]')
     parser.add_option('-f', dest='print_filtered_peaks', action='store_true', default=False, help='Print peaks filtered at each step [Default: %default]')
+    parser.add_option('-i', '--ignore', dest='ignore_gff', help='Ignore peaks overlapping troublesome regions in the given GFF file')
 
     # cufflinks options
     parser.add_option('--cuff_done', dest='cuff_done', action='store_true', default=False, help='The Cufflinks run to estimate the model parameters is already done [Default: %default]')
@@ -201,6 +202,12 @@ def main():
             putative_peaks.append(Peak(gchrom, pstart, pend, gstrand, gene_id, pfrags, pmmfrags, ppval))
 
     clip_in.close()
+
+    ############################################
+    # filter peaks using ignore GFF
+    ############################################
+    if options.ignore_gff:
+        putative_peaks = filter_peaks_ignore(putative_peaks, options.ignore_gff)
 
     ############################################
     # filter peaks using the control
@@ -684,7 +691,7 @@ def estimate_overdispersion(clip_bam, control_bam, g2t, transcripts, window_size
 ################################################################################
 def filter_peaks_control(putative_peaks, p_val, overdispersion, control_bam, norm_factor):
     # number of bp to expand each peak by to check the control
-    fuzz = 3
+    fuzz = 5
 
     # open control BAM for fetching
     control_in = pysam.Samfile(control_bam, 'rb')
@@ -745,6 +752,46 @@ def filter_peaks_control(putative_peaks, p_val, overdispersion, control_bam, nor
 
     if verbose or print_filtered_peaks:
         control_filter_out.close()
+
+    return filtered_peaks
+
+
+################################################################################
+# filter_peaks_ignore
+#
+# Input
+#  putative_peaks: List of Peak objects.
+#  ignore_gff:     GFF file specifying troublesome regions to ignore.
+#
+# Output
+#  filtered_peaks: List of filtered Peak objects.
+################################################################################
+def filter_peaks_ignore(putative_peaks, ignore_gff):
+    # temporarily print to file
+    peaks_out = open('%s/putative.gff' % out_dir, 'w')
+    for peak in putative_peaks:
+        print >> peaks_out, peak.gff_str()
+    peaks_out.close()
+
+    # intersect with ignore regions
+    subprocess.call('intersectBed -u -a %s/putative.gff -b %s > %s/ignore.gff' % (out_dir,ignore_gff,out_dir), shell=True)
+
+    # hash ignored peaks
+    ignored_peaks = set()
+    for line in open('%s/ignore.gff' % out_dir):
+        a = line.split('\t')
+        peak_tuple = (a[0], int(a[3]), int(a[4]), a[6])
+        ignored_peaks.add(peak_tuple)
+
+    # filter putative_peaks
+    filtered_peaks = []
+    for peak in putative_peaks:
+        peak_tuple = (peak.chrom, peak.start, peak.end, peak.strand)
+        if peak_tuple not in ignored_peaks:
+            filtered_peaks.append(peak)
+
+    # clean
+    os.remove('%s/putative.gff' % out_dir)
 
     return filtered_peaks
 
