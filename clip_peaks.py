@@ -45,13 +45,14 @@ def main():
     # peak calling options
     parser.add_option('-w', dest='window_size', type='int', default=50, help='Window size for scan statistic [Default: %default]')
     parser.add_option('-p', dest='p_val', type='float', default=.01, help='P-value required of window scan statistic tests [Default: %default]')
-    parser.add_option('-m', '--max_multimap_fraction', dest='max_multimap_fraction', type='float', default=0.5, help='Maximum proportion of the read count that can be contributed by multimapping reads [Default: %default]')
+    parser.add_option('-m', '--max_multimap_fraction', dest='max_multimap_fraction', type='float', default=0.3, help='Maximum proportion of the read count that can be contributed by multimapping reads [Default: %default]')
     parser.add_option('-f', dest='print_filtered_peaks', action='store_true', default=False, help='Print peaks filtered at each step [Default: %default]')
     parser.add_option('-i', '--ignore', dest='ignore_gff', help='Ignore peaks overlapping troublesome regions in the given GFF file')
 
     # cufflinks options
     parser.add_option('--cuff_done', dest='cuff_done', action='store_true', default=False, help='The Cufflinks run to estimate the model parameters is already done [Default: %default]')
-    parser.add_option('--compatible-hits-norm', dest='compatible_hits_norm', action='store_true', default=False, help='Count only fragments compatible with the reference transcriptome rather than all mapped reads [Default: %default]')
+    parser.add_option('--compatible-hits-norm', dest='compatible_hits_norm', action='store_true', default=True, help='Count only fragments compatible with the reference transcriptome [Default: %default]')
+    parser.add_option('--total-hits-norm', dest='total_hits_norm', action='store_true', default=False, help='Count all mapped fragments [Default: %default]')
     parser.add_option('-t', dest='threads', type='int', default=2, help='Number of threads to use [Default: %default]')
 
     # debug options
@@ -66,6 +67,9 @@ def main():
     else:
         clip_bam = args[0]
         ref_gtf = args[1]
+
+    if options.compatible_hits_norm == options.total_hits_norm:
+        parser.error('Must choose one of compatible-hits-norm or total-hits-norm')
 
     # set globals
     global out_dir
@@ -99,6 +103,7 @@ def main():
             hits_norm = '--compatible-hits-norm'
         else:
             hits_norm = '--total-hits-norm'
+            
         subprocess.call('cufflinks -o %s -p %d %s -G %s %s' % (out_dir, options.threads, hits_norm, update_ref_gtf, options.abundance_bam), shell=True)
 
     # store transcripts
@@ -778,9 +783,9 @@ def filter_peaks_ignore(putative_peaks, ignore_gff):
     ignorez_out = open('%s/ignore_fuzz.gff' % out_dir, 'w')
     for line in open(ignore_gff):
         a = line.split('\t')
-        a[3] = max(1, str(int(a[3])-fuzz))
+        a[3] = str(max(1,int(a[3])-fuzz))
         a[4] = str(int(a[4])+fuzz)
-        print >> ignorez_out, '\t'.join(a)
+        print >> ignorez_out, '\t'.join(a),
     ignorez_out.close()
 
     # intersect with ignore regions
