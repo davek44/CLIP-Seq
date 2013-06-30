@@ -48,6 +48,7 @@ def main():
     parser.add_option('-m', '--max_multimap_fraction', dest='max_multimap_fraction', type='float', default=0.3, help='Maximum proportion of the read count that can be contributed by multimapping reads [Default: %default]')
     parser.add_option('-f', dest='print_filtered_peaks', action='store_true', default=False, help='Print peaks filtered at each step [Default: %default]')
     parser.add_option('-i', '--ignore', dest='ignore_gff', help='Ignore peaks overlapping troublesome regions in the given GFF file')
+    parser.add_option('-u', '--unstranded', dest='unstranded', action='store_true', default=False, help='Sequencing is unstranded [Default: %default]')
 
     # cufflinks options
     parser.add_option('--cuff_done', dest='cuff_done', action='store_true', default=False, help='The Cufflinks run to estimate the model parameters is already done [Default: %default]')
@@ -110,7 +111,11 @@ def main():
     transcripts = read_genes('%s/transcripts.gtf'%out_dir, key_id='transcript_id')
 
     # merge overlapping genes
-    g2t_merge = merged_g2t('%s/transcripts.gtf'%out_dir)
+    g2t_merge, antisense_clusters = merged_g2t('%s/transcripts.gtf'%out_dir, options.unstranded)
+
+    if options.unstranded:
+        # alter strands
+        ambiguate_strands(transcripts, g2t_merge, antisense_clusters)
 
     # set junctions
     set_transcript_junctions(transcripts)
@@ -277,6 +282,24 @@ def main():
             os.remove(update_ref_gtf)
             os.remove('%s/skipped.gtf' % out_dir)
             os.remove('%s/genes.fpkm_tracking' % out_dir)
+
+
+################################################################################
+# ambiguate_strands
+#
+# Remove transcript strands if the gene belongs to a cluster with antisense
+# overlapping genes
+#
+# Input
+#  transcripts:        Hash mapping transcript_id keys to Gene class instances.
+#  g2t:                Hash mapping gene_id's to transcript_id's
+#  antisense_clusters: Set of gene_id's describing clusters with antisense overlap.
+################################################################################
+def ambiguate_strands(transcripts, g2t, antisense_clusters):
+    for gene_id in g2t:
+        if g2t in antisense_clusters:
+            for tid in g2t[gene_id]:
+                transcripts[tid].strand = '*'
 
 
 ################################################################################
@@ -727,7 +750,7 @@ def filter_peaks_control(putative_peaks, p_val, overdispersion, control_bam, nor
             control_frags *= float(peak_length) / (peak_length + 2*fuzz)
 
             # normalize for read counts
-            peak.control_frags = control_frags * norm_factor
+            peak.control_frags = max(0.1, control_frags * norm_factor)
 
         # if there are no fragments
         else:
@@ -878,20 +901,27 @@ def get_gene_regions(transcripts):
 # mapping.
 #
 # Input
-#  ref_gtf: GTF file
+#  ref_gtf:            GTF file
+#  unstranded:         Sequencing is unstranded, so handle antisense overlapping
 #
 # Output
-#  g2t:     Hash mapping gene_id's to transcript_id's
+#  g2t:                Hash mapping gene_id's to transcript_id's
+#  antisense_clusters: Set of gene_id's describing clusters with antisense overlap
 ################################################################################
-def merged_g2t(ref_gtf):
+def merged_g2t(ref_gtf, unstranded):
     # make gene span file
     span_gtf(ref_gtf, level='gene_id')
 
+    un_str = '-s'
+    if unstranded:
+        un_str = ''
+
     # intersect spans
-    p = subprocess.Popen('intersectBed -wo -s -a %s/span.gtf -b %s/span.gtf' % (out_dir,out_dir), shell=True, stdout=subprocess.PIPE)
+    p = subprocess.Popen('intersectBed -wo %s -a %s/span.gtf -b %s/span.gtf' % (un_str,out_dir,out_dir), shell=True, stdout=subprocess.PIPE)
 
     # map gene_id's to sets of overlapping genes
     id_map = {}
+    antisense_genes = set()
     for line in p.stdout:
         a = line.split('\t')
 
@@ -902,10 +932,17 @@ def merged_g2t(ref_gtf):
         for gid in gene_cluster:
             id_map[gid] = gene_cluster
 
+        strand1 = a[6]
+        strand2 = a[15]
+        if strand1 != strand2:
+            antisense_genes.add(gid1)
+            antisense_genes.add(gid2)
+
     # clean
     p.communicate()
     os.remove('%s/span.gtf' % out_dir)
 
+    # set cluster gene_id's and map genes to transcripts
     g2t = {}
     for line in open(ref_gtf):
         a = line.split('\t')
@@ -918,7 +955,14 @@ def merged_g2t(ref_gtf):
 
         g2t.setdefault(gene_id,set()).add(kv['transcript_id'])
 
-    return g2t
+    # determine antisense clusters
+    antisense_clusters = set()
+    for gene_ids in g2t:
+        for gene_id in gene_ids.split(','):
+            if gene_id in antisense_genes:
+                antisense_clusters.add(gene_ids)
+
+    return g2t, antisense_clusters
 
 
 ################################################################################
@@ -1096,7 +1140,7 @@ def position_reads(clip_in, gene_chrom, gene_start, gene_end, gene_strand, mapq_
                 mm_weight = 0.0
 
             # check strand and quality
-            if gene_strand == ar_strand:
+            if gene_strand == '*' or gene_strand == ar_strand:
                 if mapq_zero or aligned_read.mapq > 0:
                     if aligned_read.is_paired:
                         # map read to endpoint (closer to fragment center)
