@@ -297,7 +297,7 @@ def main():
 ################################################################################
 def ambiguate_strands(transcripts, g2t, antisense_clusters):
     for gene_id in g2t:
-        if g2t in antisense_clusters:
+        if gene_id in antisense_clusters:
             for tid in g2t[gene_id]:
                 transcripts[tid].strand = '*'
 
@@ -313,7 +313,7 @@ def ambiguate_strands(transcripts, g2t, antisense_clusters):
 #                 deletions in its CIGAR string (which includes splicing).
 ################################################################################
 def cigar_endpoint(aligned_read):
-    genome_pos = aligned_read.pos
+    genome_pos = aligned_read.pos+1
 
     for (operation,length) in aligned_read.cigar:
         # match
@@ -347,7 +347,7 @@ def cigar_endpoint(aligned_read):
 def cigar_midpoint(aligned_read):
     read_half = aligned_read.qlen / 2.0
     read_walked = 0
-    genome_pos = aligned_read.pos
+    genome_pos = aligned_read.pos+1
 
     for (operation,length) in aligned_read.cigar:
         # match
@@ -1124,8 +1124,11 @@ def position_reads(clip_in, gene_chrom, gene_start, gene_end, gene_strand, mapq_
     read_pos_weights = []
 
     if gene_chrom in clip_in.references:
+        # Note: fetch is dumb. it says it's 0-based, but my experiments suggsted the 
+        #       adjustment below.
+
         # for each read in span
-        for aligned_read in clip_in.fetch(gene_chrom, gene_start, gene_end):
+        for aligned_read in clip_in.fetch(gene_chrom, gene_start, gene_end-1):
             # assign strand
             try:
                 ar_strand = aligned_read.opt('XS')
@@ -1145,7 +1148,7 @@ def position_reads(clip_in, gene_chrom, gene_start, gene_end, gene_strand, mapq_
                     if aligned_read.is_paired:
                         # map read to endpoint (closer to fragment center)
                         if aligned_read.is_reverse:
-                            read_pos_weights.append((aligned_read.pos, 0.5*mm_weight, mm_weight<1))
+                            read_pos_weights.append((aligned_read.pos+1, 0.5*mm_weight, mm_weight<1))
                         else:
                             read_pos_weights.append((cigar_endpoint(aligned_read), 0.5*mm_weight, mm_weight<1))
                     else:
