@@ -812,7 +812,7 @@ def filter_peaks_ignore(putative_peaks, ignore_gff):
     ignorez_out.close()
 
     # intersect with ignore regions
-    subprocess.call('intersectBed -u -a %s/putative.gff -b %s/ignore_fuzz.gff > %s/filtered_peaks_ignore.gff' % (out_dir,out_dir,out_dir), shell=True)
+    subprocess.call('intersectBed -wo -a %s/putative.gff -b %s/ignore_fuzz.gff > %s/filtered_peaks_ignore.gff' % (out_dir,out_dir,out_dir), shell=True)
 
     # hash ignored peaks
     ignored_peaks = set()
