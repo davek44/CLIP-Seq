@@ -313,7 +313,7 @@ def ambiguate_strands(transcripts, g2t, antisense_clusters):
 #                 deletions in its CIGAR string (which includes splicing).
 ################################################################################
 def cigar_endpoint(aligned_read):
-    genome_pos = aligned_read.pos+1
+    genome_pos = aligned_read.pos+1  # correction for 0-based
 
     for (operation,length) in aligned_read.cigar:
         # match
@@ -331,7 +331,7 @@ def cigar_endpoint(aligned_read):
         else:
             print >> sys.stderr, 'Unknown CIGAR operation - %d, %s' % (operation, aligned_read.qname)
 
-    return genome_pos
+    return genome_pos-1  # correction for pointing to the last nt
 
 
 ################################################################################
