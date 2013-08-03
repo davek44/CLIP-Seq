@@ -47,7 +47,7 @@ def main():
     parser.add_option('-p', dest='p_val', type='float', default=.01, help='P-value required of window scan statistic tests [Default: %default]')
     parser.add_option('-m', '--max_multimap_fraction', dest='max_multimap_fraction', type='float', default=0.3, help='Maximum proportion of the read count that can be contributed by multimapping reads [Default: %default]')
     parser.add_option('-f', dest='print_filtered_peaks', action='store_true', default=False, help='Print peaks filtered at each step [Default: %default]')
-    parser.add_option('-i', '--ignore', dest='ignore_gff', help='Ignore peaks overlapping troublesome regions in the given GFF file')
+    parser.add_option('-i', '--ignore', dest='ignore_bed', help='Ignore peaks overlapping troublesome regions in the given BED file')
     parser.add_option('-u', '--unstranded', dest='unstranded', action='store_true', default=False, help='Sequencing is unstranded [Default: %default]')
 
     # cufflinks options
@@ -211,10 +211,10 @@ def main():
     clip_in.close()
 
     ############################################
-    # filter peaks using ignore GFF
+    # filter peaks using ignore BED
     ############################################
-    if options.ignore_gff:
-        putative_peaks = filter_peaks_ignore(putative_peaks, options.ignore_gff)
+    if options.ignore_bed:
+        putative_peaks = filter_peaks_ignore(putative_peaks, options.ignore_bed)
 
     ############################################
     # filter peaks using the control
@@ -786,30 +786,30 @@ def filter_peaks_control(putative_peaks, p_val, overdispersion, control_bam, nor
 #
 # Input
 #  putative_peaks: List of Peak objects.
-#  ignore_gff:     GFF file specifying troublesome regions to ignore.
+#  ignore_bed:     BED file specifying troublesome regions to ignore.
 #
 # Output
 #  filtered_peaks: List of filtered Peak objects.
 ################################################################################
-def filter_peaks_ignore(putative_peaks, ignore_gff):
+def filter_peaks_ignore(putative_peaks, ignore_bed):
     # temporarily print to file
     peaks_out = open('%s/putative.gff' % out_dir, 'w')
     for peak in putative_peaks:
         print >> peaks_out, peak.gff_str()
     peaks_out.close()
 
-    # add fuzz to ignore_gff
+    # add fuzz to ignore_bed
     fuzz = 10
-    ignorez_out = open('%s/ignore_fuzz.gff' % out_dir, 'w')
-    for line in open(ignore_gff):
+    ignorez_out = open('%s/ignore_fuzz.bed' % out_dir, 'w')
+    for line in open(ignore_bed):
         a = line.split('\t')
-        a[3] = str(max(1,int(a[3])-fuzz))
-        a[4] = str(int(a[4])+fuzz)
+        a[1] = str(max(1,int(a[1])-fuzz))
+        a[2] = str(int(a[2])+fuzz)
         print >> ignorez_out, '\t'.join(a),
     ignorez_out.close()
 
     # intersect with ignore regions
-    subprocess.call('intersectBed -wo -a %s/putative.gff -b %s/ignore_fuzz.gff > %s/filtered_peaks_ignore.gff' % (out_dir,out_dir,out_dir), shell=True)
+    subprocess.call('intersectBed -wo -a %s/putative.gff -b %s/ignore_fuzz.bed > %s/filtered_peaks_ignore.gff' % (out_dir,out_dir,out_dir), shell=True)
 
     # hash ignored peaks
     ignored_peaks = set()
@@ -826,7 +826,7 @@ def filter_peaks_ignore(putative_peaks, ignore_gff):
             filtered_peaks.append(peak)
 
     # clean
-    os.remove('%s/ignore_fuzz.gff' % out_dir)
+    os.remove('%s/ignore_fuzz.bed' % out_dir)
     os.remove('%s/putative.gff' % out_dir)
 
     return filtered_peaks
