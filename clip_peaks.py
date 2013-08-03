@@ -192,9 +192,6 @@ def main():
         # choose a single event position and weight the reads
         read_pos_weights = position_reads(clip_in, gchrom, gstart, gend, gstrand, mapq_zero=True)
 
-        # find splice junctions
-        #junctions = map_splice_junctions(tx)
-
         if verbose:
             print >> sys.stderr, '\tCounting and computing in windows...'
 
@@ -1201,7 +1198,7 @@ def prerna_gtf(ref_gtf):
     transcripts = read_genes(ref_gtf, key_id='transcript_id')
 
     # delete transcripts from promiscuously overlapping genes
-    for tid in transcripts.keys():        
+    for tid in transcripts.keys():
         if len(tx_overlaps.get(tid,[])) > 5:
             del transcripts[tid]
     
@@ -1304,7 +1301,7 @@ def scan_stat_approx3(k, w, T, lambd):
 # Output
 #  transcripts: Same hash, FPKM attribute set.
 ################################################################################
-def set_transcript_fpkms(transcripts):
+def set_transcript_fpkms(transcripts, missing_fpkm=1000000):
     # read from isoforms.fpkm_tracking
     fpkm_in = open('%s/isoforms.fpkm_tracking' % out_dir)
 
@@ -1319,22 +1316,22 @@ def set_transcript_fpkms(transcripts):
         if a[12] != 'FAIL':
             transcripts[tid].fpkm = fpkm
         else:
-            transcripts[tid].fpkm = 1000000
+            transcripts[tid].fpkm = missing_fpkm
             if verbose:
                 print >> sys.stderr, 'WARNING: Cufflinks failed for %s' % tid
 
     fpkm_in.close()
 
     # fill in those that go missing
-    missing_fpkms = 0
+    fpkms_missing = 0
     for tid in transcripts:
         if transcripts[tid].fpkm == None:
             if verbose:
                 print >> sys.stderr, 'WARNING: Missing FPKM for %s' % tid
-            missing_fpkms += 1
-            transcripts[tid].fpkm = 1000000
-    if missing_fpkms > 0:
-        print >> sys.stderr, 'WARNING: %d genes missing FPKM, assigned 1000000.' % missing_fpkms
+            fpkms_missing += 1
+            transcripts[tid].fpkm = missing_fpkm
+    if fpkms_missing > 0:
+        print >> sys.stderr, 'WARNING: %d genes missing FPKM, assigned %d.' % (fpkms_missing,missing_fpkm)
 
 
 ################################################################################
