@@ -186,5 +186,5 @@ def rc(seq):
 # __main__
 ################################################################################
 if __name__ == '__main__':
-    #main()
-    pdb.runcall(main)
+    main()
+    #pdb.runcall(main)
