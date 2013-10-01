@@ -5,7 +5,7 @@ from numpy import array
 from bisect import bisect_left, bisect_right
 import copy, math, os, pdb, random, subprocess, sys
 import pysam
-import fdr, gff
+import fdr, gff, stats
 
 ################################################################################
 # clip_peaks.py
@@ -51,7 +51,7 @@ def main():
     parser.add_option('-u', '--unstranded', dest='unstranded', action='store_true', default=False, help='Sequencing is unstranded [Default: %default]')
 
     # cufflinks options
-    parser.add_option('--cuff_done', dest='cuff_done', action='store_true', default=False, help='The Cufflinks run to estimate the model parameters is already done [Default: %default]')
+    parser.add_option('--cuff', dest='cuff_out_dir', help='Cufflinks output directory to estimate the model parameters from.')
     parser.add_option('--compatible-hits-norm', dest='compatible_hits_norm', action='store_true', default=True, help='Count only fragments compatible with the reference transcriptome [Default: %default]')
     parser.add_option('--total-hits-norm', dest='total_hits_norm', action='store_true', default=False, help='Count all mapped fragments [Default: %default]')
     parser.add_option('-t', dest='threads', type='int', default=2, help='Number of threads to use [Default: %default]')
@@ -92,26 +92,24 @@ def main():
     if options.abundance_bam == None:
         options.abundance_bam = clip_bam
 
-    if not options.cuff_done:
-        # make a new gtf w/ unspliced RNAs
-        update_ref_gtf = prerna_gtf(ref_gtf)
-
-        # make a new gtf file of only loci-spanning RNAs (this was to replicate Yeo's old method)
-        # update_ref_gtf = span_gtf(ref_gtf)
-
+    if not options.cuff_out_dir:
         # run Cufflinks on new gtf file and abundance BAM
         if options.compatible_hits_norm:
             hits_norm = '--compatible-hits-norm'
         else:
             hits_norm = '--total-hits-norm'
             
-        subprocess.call('cufflinks -o %s -p %d %s -G %s %s' % (out_dir, options.threads, hits_norm, update_ref_gtf, options.abundance_bam), shell=True)
+        # compute read length
+        read_length, read_sd = estimate_read_stats(options.abundance_bam)
+
+        options.cuff_out_dir = out_dir
+        subprocess.call('cufflinks -u -m %d -s %d -o %s -p %d %s -G %s %s' % (read_length, read_sd, options.cuff_out_dir, options.threads, hits_norm, ref_gtf, options.abundance_bam), shell=True)
 
     # store transcripts
-    transcripts = read_genes('%s/transcripts.gtf'%out_dir, key_id='transcript_id')
+    transcripts = read_genes('%s/transcripts.gtf'%options.cuff_out_dir, key_id='transcript_id')
 
     # merge overlapping genes
-    g2t_merge, antisense_clusters = merged_g2t('%s/transcripts.gtf'%out_dir, options.unstranded)
+    g2t_merge, antisense_clusters = merged_g2t('%s/transcripts.gtf'%options.cuff_out_dir, options.unstranded)
 
     if options.unstranded:
         # alter strands
@@ -121,14 +119,14 @@ def main():
     set_transcript_junctions(transcripts)
 
     # set transcript FPKMs
-    set_transcript_fpkms(transcripts)
+    set_transcript_fpkms(transcripts, options.cuff_out_dir)
 
     if verbose:
         print >> sys.stderr, 'Computing global statistics...'
 
     if options.compatible_hits_norm:
         # count transcriptome CLIP reads (overestimates small RNA single ended reads by counting antisense)
-        subprocess.call('intersectBed -abam %s -b %s > %s/clip.bam' % (clip_bam, '%s/transcripts.gtf'%out_dir, out_dir), shell=True)
+        subprocess.call('intersectBed -abam %s -b %s > %s/clip.bam' % (clip_bam, '%s/transcripts.gtf'%options.cuff_out_dir, out_dir), shell=True)
         clip_reads = count_reads('%s/clip.bam' % out_dir)
         os.remove('%s/clip.bam' % out_dir)
     else:
@@ -141,7 +139,6 @@ def main():
     txome_size = transcriptome_size(transcripts, g2t_merge, options.window_size)
     if verbose:
         print >> sys.stderr, '\t%d transcriptome windows' % txome_size
-
 
     ############################################
     # process genes
@@ -225,7 +222,7 @@ def main():
 
         if options.compatible_hits_norm:
             # count transcriptome control reads
-            subprocess.call('intersectBed -abam %s -b %s > %s/control.bam' % (options.control_bam, '%s/transcripts.gtf'%out_dir, out_dir), shell=True)
+            subprocess.call('intersectBed -abam %s -b %s/transcripts.gtf > %s/control.bam' % (options.control_bam, options.cuff_out_dir, out_dir), shell=True)
             control_reads = count_reads('%s/control.bam' % out_dir)
             os.remove('%s/control.bam' % out_dir)
         else:
@@ -272,13 +269,6 @@ def main():
     peaks_out.close()
     if verbose or print_filtered_peaks:
         mm_peaks_out.close()
-
-    # clean cufflinks output
-    if not verbose:
-        if not options.cuff_done:
-            os.remove(update_ref_gtf)
-            os.remove('%s/skipped.gtf' % out_dir)
-            os.remove('%s/genes.fpkm_tracking' % out_dir)
 
 
 ################################################################################
@@ -702,6 +692,33 @@ def estimate_overdispersion(clip_bam, control_bam, g2t, transcripts, window_size
     
 
 ################################################################################
+# estimate_read_stats
+#
+# Compute mean read length by sampling the first N reads.
+#
+# Input
+#  bam_file:    BAM.
+#
+# Output:
+#  read_length: Mean read length.
+#  read_sd:     Read length standard deviation.
+################################################################################
+def estimate_read_stats(bam_file):
+    samples = 100000
+    s = 0
+    read_lengths = []
+    for aligned_read in pysam.Samfile(bam_file, 'rb'):
+        read_lengths.append(aligned_read.rlen)
+        s += 1
+        if s >= samples:
+            break
+            
+    mean_f, sd_f = stats.mean_sd(read_lengths)
+
+    return int(mean_f+0.5), int(sd_f+0.5)
+
+
+################################################################################
 # filter_peaks_control
 #
 # Input
@@ -799,7 +816,7 @@ def filter_peaks_ignore(putative_peaks, ignore_bed):
     peaks_out.close()
 
     # add fuzz to ignore_bed
-    fuzz = 10
+    fuzz = 3
     ignorez_out = open('%s/ignore_fuzz.bed' % out_dir, 'w')
     for line in open(ignore_bed):
         a = line.split('\t')
@@ -807,7 +824,7 @@ def filter_peaks_ignore(putative_peaks, ignore_bed):
         a[2] = str(int(a[2])+fuzz)
         print >> ignorez_out, '\t'.join(a),
     ignorez_out.close()
-
+    
     # intersect with ignore regions
     subprocess.call('intersectBed -wo -a %s/putative.gff -b %s/ignore_fuzz.bed > %s/filtered_peaks_ignore.gff' % (out_dir,out_dir,out_dir), shell=True)
 
@@ -1301,9 +1318,9 @@ def scan_stat_approx3(k, w, T, lambd):
 # Output
 #  transcripts: Same hash, FPKM attribute set.
 ################################################################################
-def set_transcript_fpkms(transcripts, missing_fpkm=1000000):
+def set_transcript_fpkms(transcripts, cuff_dir, missing_fpkm=1000000):
     # read from isoforms.fpkm_tracking
-    fpkm_in = open('%s/isoforms.fpkm_tracking' % out_dir)
+    fpkm_in = open('%s/isoforms.fpkm_tracking' % cuff_dir)
 
     line = fpkm_in.readline()
     for line in fpkm_in:
