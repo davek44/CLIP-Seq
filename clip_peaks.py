@@ -771,13 +771,14 @@ def filter_peaks_control(putative_peaks, p_val, overdispersion, control_bam, nor
             # assume a small value that will pass
             peak.control_frags = 0.1
 
-        # perform poisson test
-        #control_p_values.append( poisson.sf(peak.frags-1, peak.control_frags) )
-
-        # perform negative binomial test
-        nb_p = 1.0 / (1.0 + peak.control_frags*overdispersion)
-        nb_n = 1.0 / overdispersion
-        control_p_values.append( nbinom.sf(peak.frags-1, nb_n, nb_p) )
+        if overdispersion == 0:
+            # perform poisson test
+            control_p_values.append( poisson.sf(peak.frags-1, peak.control_frags) )
+        else:
+            # perform negative binomial test
+            nb_p = 1.0 / (1.0 + peak.control_frags*overdispersion)
+            nb_n = 1.0 / overdispersion
+            control_p_values.append( nbinom.sf(peak.frags-1, nb_n, nb_p) )
 
     # correct for multiple hypotheses
     control_q_values = fdr.ben_hoch(control_p_values)
