@@ -14,6 +14,9 @@ import pybloomfilter, pysam
 #
 # --restart mode is semi-tested to not crash, but not fully tested to be the
 # same as the initial run.
+#
+# There's a bug in split_lost_multi, that I think is harmless, but I should
+# look into if I want to use this code again.
 ################################################################################
 
 
@@ -35,6 +38,7 @@ def main():
     parser.add_option('-p', '--num_threads', dest='num_threads', type='int', default=2, help='# of TopHat threads to launch [Default: %default]')
     parser.add_option('-G','--GTF', dest='gtf_file', help='Reference GTF file')
     parser.add_option('--transcriptome-index', dest='tx_index', default='txome', help='Transcriptome bowtie2 index [Default: %default]')
+    parser.add_option('-M', dest='opt_M', default=False, action='store_true', help='Use TopHat -M [Default: %default]')
 
     # output options
     parser.add_option('-o', dest='output_dir', default='.', help='Output directory [Default %default]')
@@ -102,11 +106,15 @@ def main():
         read_len = options.initial_seed
         total_unique = 0
 
+        str_M = ''
+        if options.opt_M:
+            str_M = '-M'
+
         # trim reads
         initial_fastq(fastq_files, read_len, read_finalized)
 
         # align fastq
-        subprocess.call('tophat -o thout%d -p %d -G %s -M --no-novel-juncs --transcriptome-index=%s %s iter.fq' % (read_len, options.num_threads, options.gtf_file, options.tx_index, bowtie_index), shell=True)
+        subprocess.call('tophat -o thout%d -p %d -G %s %s --no-novel-juncs --transcriptome-index=%s %s iter.fq' % (read_len, options.num_threads, options.gtf_file, str_M, options.tx_index, bowtie_index), shell=True)
         if options.keep_tmp:
             os.rename('iter.fq','thout%d/iter.fq' % read_len)
 
@@ -128,7 +136,7 @@ def main():
             unique_pct = 100.0
         else:
             unique_pct = iter_unique / float(total_unique)
-        print >> sys.stderr, 'Iteration %d mapped %d additional reads uniquely, an increase of %.3f\%' % (read_len-1, iter_unique, 100.0*unique_pct)
+        print >> sys.stderr, 'Iteration %d mapped %d additional reads uniquely, an increase of %.3f%%' % (read_len-1, iter_unique, 100.0*unique_pct)
 
         # consider stopping if the benefit is small
         if unique_pct < options.stop:
@@ -140,7 +148,7 @@ def main():
         update_fastq(fastq_files, read_len, read_finalized, multimap_bf)
 
         # align iteration fastq
-        subprocess.call('tophat -o thout%d -p %d -G %s -M --no-novel-juncs --transcriptome-index=%s %s iter.fq' % (read_len, options.num_threads, options.gtf_file, options.tx_index, bowtie_index), shell=True)
+        subprocess.call('tophat -o thout%d -p %d -G %s %s --no-novel-juncs --transcriptome-index=%s %s iter.fq' % (read_len, options.num_threads, options.gtf_file, str_M, options.tx_index, bowtie_index), shell=True)
         if options.keep_tmp:
             os.rename('iter.fq','thout%d/iter.fq' % read_len)
 
