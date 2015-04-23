@@ -5,7 +5,7 @@ from numpy import array
 from bisect import bisect_left, bisect_right
 import copy, math, os, pdb, random, subprocess, sys
 import pysam
-import fdr, gff, stats
+import bam_fragments, fdr, gff, stats
 
 ################################################################################
 # clip_peaks.py
@@ -54,7 +54,7 @@ def main():
     parser.add_option('--cuff', dest='cuff_out_dir', help='Cufflinks output directory to estimate the model parameters from.')
     parser.add_option('--compatible-hits-norm', dest='compatible_hits_norm', action='store_true', default=True, help='Count only fragments compatible with the reference transcriptome [Default: %default]')
     parser.add_option('--total-hits-norm', dest='total_hits_norm', action='store_true', default=False, help='Count all mapped fragments [Default: %default]')
-    parser.add_option('-t', dest='threads', type='int', default=2, help='Number of threads to use [Default: %default]')
+    parser.add_option('-t', dest='threads', type='int', default=1, help='Number of threads to use [Default: %default]')
 
     # debug options
     parser.add_option('-v', '--verbose', dest='verbose', action='store_true', default=False, help='Verbose output [Default: %default]')
@@ -127,11 +127,11 @@ def main():
     if options.compatible_hits_norm:
         # count transcriptome CLIP reads (overestimates small RNA single ended reads by counting antisense)
         subprocess.call('intersectBed -abam %s -b %s > %s/clip.bam' % (clip_bam, '%s/transcripts.gtf'%options.cuff_out_dir, out_dir), shell=True)
-        clip_reads = count_reads('%s/clip.bam' % out_dir)
+        clip_reads = bam_fragments.count('%s/clip.bam' % out_dir)
         os.remove('%s/clip.bam' % out_dir)
     else:
         # count CLIP reads
-        clip_reads = count_reads(clip_bam)
+        clip_reads = bam_fragments.count(clip_bam)
     if verbose:
         print >> sys.stderr, '\t%d CLIP reads' % clip_reads
 
@@ -199,7 +199,7 @@ def main():
             print >> sys.stderr, '\tRefining peaks...'
 
         # post-process windows to peaks
-        peaks = windows2peaks(read_pos_weights, gene_transcripts, gstart, window_stats, options.window_size, options.p_val, clip_reads, txome_size)
+        peaks = windows2peaks(read_pos_weights, gene_transcripts, gstart, window_stats, options.window_size, options.p_val, clip_reads, txome_size)            
 
         # save peaks
         for pstart, pend, pfrags, pmmfrac, ppval in peaks:
@@ -223,11 +223,11 @@ def main():
         if options.compatible_hits_norm:
             # count transcriptome control reads
             subprocess.call('intersectBed -abam %s -b %s/transcripts.gtf > %s/control.bam' % (options.control_bam, options.cuff_out_dir, out_dir), shell=True)
-            control_reads = count_reads('%s/control.bam' % out_dir)
+            control_reads = bam_fragments.count('%s/control.bam' % out_dir)
             os.remove('%s/control.bam' % out_dir)
         else:
             # count countrol reads
-            control_reads = count_reads(options.control_bam)
+            control_reads = bam_fragments.count(options.control_bam)
         if verbose:
             print >> sys.stderr, '\t%d Control reads' % control_reads
 
@@ -442,35 +442,6 @@ def convolute_lambda(window_start, window_end, gene_transcripts, junctions_i, to
 
     # convert from fpkm to lambda
     return fpkm_conv / 1000.0*(total_reads/1000000.0)
-
-
-################################################################################
-# count_reads
-#
-# Input
-#  bam_file:    BAM file with NH tags.
-#
-# Output
-#  total_reads: Total number of reads aligned with positive mapping quality,
-#                counting based on the NH tags and counting paired end reads
-#                as half.
-################################################################################
-def count_reads(bam_file):
-    total_reads = 0.0
-
-    for aligned_read in pysam.Samfile(bam_file, 'rb'):
-        if aligned_read.mapq > 0:
-            try:
-                nh_tag = aligned_read.opt('NH')
-            except:
-                nh_tag = 1
-
-            if aligned_read.is_paired:
-                total_reads += 0.5/nh_tag
-            else:
-                total_reads += 1.0/nh_tag
-
-    return total_reads
 
 
 ################################################################################
@@ -704,14 +675,15 @@ def estimate_overdispersion(clip_bam, control_bam, g2t, transcripts, window_size
 #  read_sd:     Read length standard deviation.
 ################################################################################
 def estimate_read_stats(bam_file):
-    samples = 100000
+    samples = 2000000
     s = 0
     read_lengths = []
     for aligned_read in pysam.Samfile(bam_file, 'rb'):
-        read_lengths.append(aligned_read.rlen)
-        s += 1
-        if s >= samples:
-            break
+        if aligned_read.mapq > 0:
+            read_lengths.append(aligned_read.rlen)
+            s += 1
+            if s >= samples:
+                break
             
     mean_f, sd_f = stats.mean_sd(read_lengths)
 
@@ -1331,12 +1303,16 @@ def set_transcript_fpkms(transcripts, cuff_dir, missing_fpkm=1000000):
         tid = a[0]
         fpkm = float(a[9])
 
-        if a[12] != 'FAIL':
-            transcripts[tid].fpkm = fpkm
-        else:
-            transcripts[tid].fpkm = missing_fpkm
+        if tid not in transcripts:
             if verbose:
-                print >> sys.stderr, 'WARNING: Cufflinks failed for %s' % tid
+                print >> sys.stderr, 'WARNING: %s quantified but missing from transcripts.gtf' % tid
+        else:
+            if a[12] != 'FAIL':
+                transcripts[tid].fpkm = fpkm
+            else:
+                transcripts[tid].fpkm = missing_fpkm
+                if verbose:
+                    print >> sys.stderr, 'WARNING: Cufflinks failed for %s' % tid
 
     fpkm_in.close()
 
