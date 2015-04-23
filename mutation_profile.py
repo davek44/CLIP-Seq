@@ -10,30 +10,29 @@ import pysam
 # limited to those reads overlapping a gff or bed file.
 ################################################################################
 
-
 ################################################################################
 # main
 ################################################################################
 def main():
-    usage = 'usage: %prog [options] <fasta file> <bam file>'
+    usage = 'usage: %prog [options] <bam file>'
     parser = OptionParser(usage)
-    parser.add_option('-f', dest='feature_file', help='Limit to reads overlapping these features in GFF or BED')
+    parser.add_option('-f', dest='fasta_file', default='%s/sequence/hg19.fa'%os.environ['HG19'], help='Fasta file reads were aligned to [Default: %default]')
+    parser.add_option('-g', dest='filter_gff', help='Limit to reads overlapping these features in GFF or BED')
     (options,args) = parser.parse_args()
     
-    if len(args) != 2:
+    if len(args) != 1:
         parser.error(usage)
     else:
-        fasta_file = args[0]
-        bam_file = args[1]
+        bam_file = args[0]
 
     # filter BAM using features
-    if options.feature_file:
+    if options.filter_gff:
         bam_feat_fd, bam_feat_file = tempfile.mkstemp(dir='%s/research/scratch/temp' % os.environ['HOME'])
-        subprocess.call('intersectBed -abam %s -b %s > %s' % (bam_file, options.feature_file, bam_feat_file), shell=True)
+        subprocess.call('intersectBed -abam %s -b %s > %s' % (bam_file, options.filter_gff, bam_feat_file), shell=True)
         bam_file = bam_feat_file
 
     # load reference fasta
-    fasta = pysam.Fastafile(fasta_file)
+    fasta = pysam.Fastafile(options.fasta_file)
 
     # count mutations and nt's
     mutation_profile = {}
@@ -110,7 +109,7 @@ def main():
 
     # clean
     bam_in.close()
-    if options.feature_file:
+    if options.filter_gff:
         os.close(bam_feat_fd)
         os.remove(bam_feat_file)
 
